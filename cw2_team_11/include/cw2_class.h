@@ -21,7 +21,6 @@ solution is contained within the cw2_team_<your_team_number> package */
 #include <geometry_msgs/msg/point_stamped.hpp>
 
 #include <pcl_conversions/pcl_conversions.h>
-#include <tf2_ros.h>
 #include <tf2/exceptions.h>
 #include <tf2_ros/buffer.h>
 #include <tf2/time.h>
@@ -86,7 +85,6 @@ public:
   void filteringPipeline();
   Eigen::Vector3f toWorldFrame(Eigen::Vector3f local_point);
   bool moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group, float theta);
-  SHAPE classifyShape(PointC &in_cloud_ptr);
 
 
 
@@ -114,7 +112,7 @@ public:
 
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
-  sensor_msgs::msg::PointCloud2::SharedPtr latest_cloud_msg_;
+  sensor_msgs::msg::PointCloud2::ConstSharedPtr latest_cloud_msg_;
 
   //pcl variables
   PointCPtr g_cloud_ptr;
@@ -142,10 +140,6 @@ public:
 
   pcl::PointIndices::Ptr g_inliers_plane;
   pcl::ModelCoefficients::Ptr g_coeff_plane;
-
-  //Transform Buffer for bringing to world frame
-  std::shared_ptr<tf2_ros::Buffer>            tf_buffer_;
-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
   std::atomic<int64_t> latest_joint_state_stamp_ns_{0};
   std::atomic<uint64_t> joint_state_msg_count_{0};
@@ -222,24 +216,27 @@ public:
 
   // struct and enum to define shapes
 
-  enum SHAPE_TYPE
+  enum class SHAPE_TYPE
   {
-    NOUGHT = 0,
+    NOUGHT,
     CROSS
-  } ;
+  };
 
-  enum SHAPE_SIZE
+  enum class SHAPE_SIZE
   {
-    20_MM = 0,
-    30_MM,
-    40_MM
+    MM_20,
+    MM_30,
+    MM_40
   };
 
   struct SHAPE
   {
-    enum SHAPE_TYPE type;
-    enum SHAPE_SIZE size;
+    SHAPE_TYPE type;
+    SHAPE_SIZE size;
   };
+
+  SHAPE classifyShape(PointC &in_cloud_ptr);
+
 
 };
 

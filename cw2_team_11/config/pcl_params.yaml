@@ -1,0 +1,16 @@
+/cw2_solution_node:
+  ros__parameters:
+    pcl:
+      voxel_leaf_size:      0.01
+      pass_min:             -0.31
+      pass_max:             0.18
+      pass_axis:            "y"
+      outlier_mean_k:       20
+      outlier_stddev:       1.0
+      normal_k:             50
+      plane_normal_weight:  0.1
+      plane_max_iterations: 100
+      plane_distance:       0.03
+      cluster_tolerance:    0.02
+      cluster_min_size:     100
+      cluster_max_size:     25000

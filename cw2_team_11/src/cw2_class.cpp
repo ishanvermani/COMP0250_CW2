@@ -30,8 +30,7 @@ COMP0250 Coursework 2 - Team 11
 cw2::cw2(const rclcpp::Node::SharedPtr &node)
 : node_(node),
   tf_buffer_(node->get_clock()),
-  tf_listener_(tf_buffer_),
-  g_cloud_ptr(new PointC)
+  tf_listener_(tf_buffer_)
 {
 
 
@@ -117,10 +116,7 @@ cw2::cw2(const rclcpp::Node::SharedPtr &node)
 
   g_pub_clusters = {g_pub_cluster1, g_pub_cluster2, g_pub_cluster3, g_pub_cluster4, g_pub_cluster5, g_pub_cluster6};
 
-  tf_buffer_   = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
-  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
-
-
+  
   pointcloud_topic_ = node_->declare_parameter<std::string>(
     "pointcloud_topic", "/r200/camera/depth_registered/points");
   pointcloud_qos_reliable_ =
@@ -156,6 +152,8 @@ void cw2::cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg
 {
   pcl::PCLPointCloud2 pcl_cloud;
   pcl_conversions::toPCL(*msg, pcl_cloud);
+
+  latest_cloud_msg_ = msg;
 
   PointCPtr latest_cloud(new PointC);
   pcl::fromPCLPointCloud2(pcl_cloud, *latest_cloud);
@@ -422,7 +420,7 @@ std::vector<PointCPtr> cw2::extractEuclideanClusters(double clusterTolerance, in
       // For testing only
       std_msgs::msg::Header header;
       header.frame_id = "color";
-      header.stamp = latest_cloud->header.stamp;
+      header.stamp = latest_cloud_msg_->header.stamp;
       pubFilteredPCMsg(g_pub_clusters[num_cluster], *cloud_cluster, header);
 
     }
@@ -453,9 +451,9 @@ cw2::SHAPE cw2::classifyShape(PointC &in_cloud_ptr)
   //Discrepancy here.
 
 
-  SHAPE shape;
-  shape.type = CROSS;
-  shape.size = 40_MM;
+  cw2::SHAPE shape;
+  shape.type = cw2::SHAPE_TYPE::CROSS;
+  shape.size = cw2::SHAPE_SIZE::MM_40;
 
   return shape;
 
@@ -481,13 +479,13 @@ void cw2::pubFilteredPCMsg(
 //debug helper
 void cw2::processCloud()
 {
-  if (!latest_cloud) {
+  if (!latest_cloud_msg_) {
     RCLCPP_WARN(node_->get_logger(), "reprocessCloud: no cloud yet, skipping.");
     return;
   }
   std_msgs::msg::Header header;
   header.frame_id = "color";
-  header.stamp = latest_cloud->header.stamp;
+  header.stamp = latest_cloud_msg_->header.stamp;
 
   pubFilteredPCMsg(g_pub_cloud, *g_cloud_filtered, header);
   applyPassthrough(pcl_pass_min_, pcl_pass_max_, pcl_pass_axis_);
@@ -558,7 +556,7 @@ std::string cw2::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
 
 void cw2::filteringPipeline()
 {
-  rosTopicToCloud(latest_cloud_msg_);
+  // rosTopicToCloud(latest_cloud_msg_);
   // applyVoxelGrid(0.05);
   applyPassthrough(-0.31, 0.18, "y");
   applyOutlierRemoval(20, 1.0);
@@ -577,7 +575,7 @@ Eigen::Vector3f cw2::toWorldFrame(Eigen::Vector3f local_point)
   local.point.z = local_point.z();
 
   try {
-    tf_buffer_->transform(local, world, "panda_link0");
+    tf_buffer_.transform(local, world, "panda_link0");
   } catch (tf2::TransformException &ex) {
     RCLCPP_WARN(node_->get_logger(), "Transform failed: %s", ex.what());
     return local_point;
