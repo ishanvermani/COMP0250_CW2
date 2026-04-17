@@ -10,15 +10,6 @@ solution is contained within the cw2_team_<your_team_number> package */
 #include <memory>
 #include <mutex>
 #include <string>
-#include <moveit/move_group_interface/move_group_interface.h>
-#include <moveit/planning_scene_interface/planning_scene_interface.h>
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
-#include <pcl_conversions/pcl_conversions.h>
-#include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_listener.h>
 
 #include "cw2_world_spawner/srv/task1_service.hpp"
 #include "cw2_world_spawner/srv/task2_service.hpp"
@@ -30,6 +21,7 @@ solution is contained within the cw2_team_<your_team_number> package */
 #include <geometry_msgs/msg/point_stamped.hpp>
 
 #include <pcl_conversions/pcl_conversions.h>
+#include <tf2_ros.h>
 #include <tf2/exceptions.h>
 #include <tf2_ros/buffer.h>
 #include <tf2/time.h>
@@ -79,6 +71,24 @@ public:
     std::shared_ptr<cw2_world_spawner::srv::Task3Service::Response> response);
 
   void cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
+
+  void applyVoxelGrid(double leaf_size);
+  void applyPassthrough(double pass_min, double pass_max, std::string pass_axis);
+  void applyOutlierRemoval(int mean_k, double stddev);
+  void findNormals(int normal_k);
+  void segmentationPipeline(double normal_dist_weight, int max_iterations, double distance);
+  std::vector<PointCPtr> extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
+  void pubFilteredPCMsg(
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub, PointC &pc, const std_msgs::msg::Header &header);
+  void processCloud();
+  Eigen::Vector3f getCentroid(PointC &in_cloud_ptr);
+  std::string colorOfPointCloud(PointC &in_cloud_ptr, float threshold);
+  void filteringPipeline();
+  Eigen::Vector3f toWorldFrame(Eigen::Vector3f local_point);
+  bool moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group, float theta);
+  SHAPE classifyShape(PointC &in_cloud_ptr);
+
+
 
   rclcpp::Node::SharedPtr node_;
   rclcpp::Service<cw2_world_spawner::srv::Task1Service>::SharedPtr t1_service_;
@@ -196,17 +206,41 @@ public:
 
   // Create an array of all colors
 
-  static constexpr size_t num_colors = 3;
+  static constexpr size_t num_colors = 5;
   const std::array<std::array<float, 3>, num_colors> colors = {{
       {0.1f, 0.1f, 0.8f},   // blue
       {0.8f, 0.1f, 0.8f},   // purple
-      {0.8f, 0.1f, 0.1f}   // red
+      {0.8f, 0.1f, 0.1f},   // red
+      {0.1f, 0.1f, 0.1f},   //black
+      {0.5f, 0.2f, 0.2f}    //brown
+
   }};  
   
-  const std::array<std::string, num_colors> color_names = {"blue", "purple", "red"};
+  const std::array<std::string, num_colors> color_names = {"blue", "purple", "red", "black", "brown"};
 
   const std::string no_color = "none";
-  const std::array<float, 3> black = {0.1f, 0.1f, 0.1f};
+
+  // struct and enum to define shapes
+
+  enum SHAPE_TYPE
+  {
+    NOUGHT = 0,
+    CROSS
+  } ;
+
+  enum SHAPE_SIZE
+  {
+    20_MM = 0,
+    30_MM,
+    40_MM
+  };
+
+  struct SHAPE
+  {
+    enum SHAPE_TYPE type;
+    enum SHAPE_SIZE size;
+  };
+
 };
 
 #endif  // CW2_CLASS_H_

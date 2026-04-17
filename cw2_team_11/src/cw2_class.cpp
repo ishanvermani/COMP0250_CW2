@@ -3,7 +3,27 @@ you can do whatever you want with this template code, including deleting it all
 and starting from scratch. The only requirment is to make sure your entire
 solution is contained within the cw2_team_<your_team_number> package */
 
+
+/*
+
+COMP0250 Coursework 2 - Team 11
+
+
+
+
+
+*/
+
+/**
+ * KEY ASSUMPTIONS
+ * * 
+ * * */
+
+
 #include <cw2_class.h>
+
+
+
 
 #include <utility>
 
@@ -13,6 +33,66 @@ cw2::cw2(const rclcpp::Node::SharedPtr &node)
   tf_listener_(tf_buffer_),
   g_cloud_ptr(new PointC)
 {
+
+
+//init values
+  g_cloud_ptr = std::make_shared<PointC>();
+  g_cloud_filtered = std::make_shared<PointC>();
+  g_cloud_plane = std::make_shared<PointC>();
+  g_cloud_segmented_plane = std::make_shared<PointC>();
+  g_cloud_cluster = std::make_shared<PointC>();
+  g_tree_ptr = std::make_shared<pcl::search::KdTree<PointT>>();
+  g_tree_ptr_euclidean = std::make_shared<pcl::search::KdTree<PointT>>();
+  g_cloud_normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
+  g_cloud_segmented_normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
+  g_inliers_plane = std::make_shared<pcl::PointIndices>();
+  g_coeff_plane = std::make_shared<pcl::ModelCoefficients>();
+
+  // PCL DEBUG VALUES
+  pcl_voxel_leaf_size_      = node_->declare_parameter("pcl.voxel_leaf_size",      pcl_voxel_leaf_size_);
+  pcl_pass_min_             = node_->declare_parameter("pcl.pass_min",             pcl_pass_min_);
+  pcl_pass_max_             = node_->declare_parameter("pcl.pass_max",             pcl_pass_max_);
+  pcl_pass_axis_            = node_->declare_parameter("pcl.pass_axis",            pcl_pass_axis_);
+  pcl_outlier_mean_k_       = node_->declare_parameter("pcl.outlier_mean_k",       pcl_outlier_mean_k_);
+  pcl_outlier_stddev_       = node_->declare_parameter("pcl.outlier_stddev",       pcl_outlier_stddev_);
+  pcl_normal_k_             = node_->declare_parameter("pcl.normal_k",             pcl_normal_k_);
+  pcl_plane_normal_weight_  = node_->declare_parameter("pcl.plane_normal_weight",  pcl_plane_normal_weight_);
+  pcl_plane_max_iterations_ = node_->declare_parameter("pcl.plane_max_iterations", pcl_plane_max_iterations_);
+  pcl_plane_distance_       = node_->declare_parameter("pcl.plane_distance",       pcl_plane_distance_);
+  pcl_cluster_tolerance_    = node_->declare_parameter("pcl.cluster_tolerance",    pcl_cluster_tolerance_);
+  pcl_cluster_min_size_     = node_->declare_parameter("pcl.cluster_min_size",     pcl_cluster_min_size_);
+  pcl_cluster_max_size_     = node_->declare_parameter("pcl.cluster_max_size",     pcl_cluster_max_size_);
+
+  // UPDATE CALLBACK FOR PCL DEBUGGING
+  param_cb_handle_= node_->add_on_set_parameters_callback(
+    [this](const std::vector<rclcpp::Parameter> &params)
+    {
+
+      RCLCPP_INFO_STREAM(node_->get_logger(), "Callback param reset triggered");
+
+      for (const auto &p : params) {
+        const auto &n = p.get_name();
+        if      (n == "pcl.voxel_leaf_size")      pcl_voxel_leaf_size_      = p.as_double();
+        else if (n == "pcl.pass_min")             pcl_pass_min_             = p.as_double();
+        else if (n == "pcl.pass_max")             pcl_pass_max_             = p.as_double();
+        else if (n == "pcl.pass_axis")            pcl_pass_axis_            = p.as_string();
+        else if (n == "pcl.outlier_mean_k")       pcl_outlier_mean_k_       = static_cast<int>(p.as_int());
+        else if (n == "pcl.outlier_stddev")       pcl_outlier_stddev_       = p.as_double();
+        else if (n == "pcl.normal_k")             pcl_normal_k_             = static_cast<int>(p.as_int());
+        else if (n == "pcl.plane_normal_weight")  pcl_plane_normal_weight_  = p.as_double();
+        else if (n == "pcl.plane_max_iterations") pcl_plane_max_iterations_ = static_cast<int>(p.as_int());
+        else if (n == "pcl.plane_distance")       pcl_plane_distance_       = p.as_double();
+        else if (n == "pcl.cluster_tolerance")    pcl_cluster_tolerance_    = p.as_double();
+        else if (n == "pcl.cluster_min_size")     pcl_cluster_min_size_     = static_cast<int>(p.as_int());
+        else if (n == "pcl.cluster_max_size")     pcl_cluster_max_size_     = static_cast<int>(p.as_int());
+      }
+      rcl_interfaces::msg::SetParametersResult result;
+      result.successful = true;
+
+      processCloud();
+      return result;
+    });
+
   t1_service_ = node_->create_service<cw2_world_spawner::srv::Task1Service>(
     "/task1_start",
     std::bind(&cw2::t1_callback, this, std::placeholders::_1, std::placeholders::_2));
@@ -22,6 +102,24 @@ cw2::cw2(const rclcpp::Node::SharedPtr &node)
   t3_service_ = node_->create_service<cw2_world_spawner::srv::Task3Service>(
     "/task3_start",
     std::bind(&cw2::t3_callback, this, std::placeholders::_1, std::placeholders::_2));
+
+  //debug publishers
+  g_pub_cloud = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud", 1);
+  g_pub_passthrough = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_passthrough", 1);
+  g_pub_outlier = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_outlier", 1);
+  g_pub_plane = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_plane", 1);
+  g_pub_cluster1 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster1", 1);
+  g_pub_cluster2 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster2", 1);
+  g_pub_cluster3 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster3", 1);
+  g_pub_cluster4 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster4", 1);
+  g_pub_cluster5 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster5", 1);
+  g_pub_cluster6 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster6", 1);
+
+  g_pub_clusters = {g_pub_cluster1, g_pub_cluster2, g_pub_cluster3, g_pub_cluster4, g_pub_cluster5, g_pub_cluster6};
+
+  tf_buffer_   = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
+  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
 
   pointcloud_topic_ = node_->declare_parameter<std::string>(
     "pointcloud_topic", "/r200/camera/depth_registered/points");
@@ -61,6 +159,8 @@ void cw2::cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg
 
   PointCPtr latest_cloud(new PointC);
   pcl::fromPCLPointCloud2(pcl_cloud, *latest_cloud);
+
+  *g_cloud_filtered = *latest_cloud;
 
   std::lock_guard<std::mutex> lock(cloud_mutex_);
   g_input_pc_frame_id_ = msg->header.frame_id;
@@ -110,12 +210,27 @@ void cw2::t2_callback(
     sequence = g_cloud_sequence_;
   }
 
-  RCLCPP_WARN(
-    node_->get_logger(),
-    "Task 2 is not implemented in cw2_team_11. Latest cloud: seq=%llu frame='%s' points=%zu",
-    static_cast<unsigned long long>(sequence),
-    frame_id.c_str(),
-    point_count);
+  
+  static const std::string planning_group = "panda_arm";
+  moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
+
+
+  move_group2.setPlanningTime(5.0);
+  move_group2.setMaxVelocityScalingFactor(0.2);
+  move_group2.setMaxAccelerationScalingFactor(0.2);
+  if (!moveToBirdeye(move_group2, 80))
+  {
+    //failed to get to birdseye postion - manually defined position by joint angles
+    return;
+  }
+
+
+  // RCLCPP_WARN(
+  //   node_->get_logger(),
+  //   "Task 2 is not implemented in cw2_team_11. Latest cloud: seq=%llu frame='%s' points=%zu",
+  //   static_cast<unsigned long long>(sequence),
+  //   frame_id.c_str(),
+  //   point_count);
 }
 
 void cw2::t3_callback(
@@ -143,4 +258,330 @@ void cw2::t3_callback(
     static_cast<unsigned long long>(sequence),
     frame_id.c_str(),
     point_count);
+}
+
+
+bool cw2::moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group, float theta=0.0)
+{
+  RCLCPP_INFO(node_->get_logger(), "Moving to 'birdeye' joint pose");
+
+  std::vector<double> joint_positions = {
+    theta * M_PI / 180.0, //panda_joint_1
+    0 * M_PI / 180.0, //panda_joint_2
+    0 * M_PI / 180.0, //panda_joint_3
+    -45.0 * M_PI / 180.0, //panda_joint_4
+    0 * M_PI / 180.0, //panda_joint_5
+    45.0 * M_PI / 180.0, //panda_joint_6
+    45.0 * M_PI / 180.0 //panda_joint_7
+  };
+
+  move_group.setJointValueTarget(joint_positions);
+
+  moveit::planning_interface::MoveGroupInterface::Plan plan;
+
+  if (move_group.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS)
+  {
+    if (move_group.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS)
+    {
+      rclcpp::sleep_for(std::chrono::milliseconds(1000));
+      return true;
+    }
+  }
+
+  RCLCPP_ERROR(node_->get_logger(), "Failed to move to 'birdeye' joint pose");
+
+  return false;
+
+}
+
+//PCL FUNCTIONS
+
+
+void cw2::applyVoxelGrid(double g_leaf_size)
+{
+  
+  PointCPtr output_cloud(new PointC);
+
+  g_vx.setInputCloud(g_cloud_filtered);
+  g_vx.setLeafSize(g_leaf_size, g_leaf_size, g_leaf_size);
+  g_vx.filter(*output_cloud);
+
+  g_cloud_filtered.swap(output_cloud);
+
+}
+
+void cw2::applyPassthrough(double g_pass_min, double g_pass_max, std::string g_pass_axis)
+{
+  
+  PointCPtr output_cloud(new PointC);
+
+  g_pt.setInputCloud(g_cloud_filtered);
+  g_pt.setFilterFieldName(g_pass_axis);
+  g_pt.setFilterLimits(g_pass_min, g_pass_max);
+  g_pt.filter(*output_cloud);
+  g_cloud_filtered.swap(output_cloud);
+
+
+}
+
+void cw2::applyOutlierRemoval(int g_outlier_mean_k, double g_outlier_stddev)
+{
+  
+  PointCPtr output_cloud(new PointC);
+
+  g_sor.setInputCloud(g_cloud_filtered);
+  g_sor.setMeanK(g_outlier_mean_k);
+  g_sor.setStddevMulThresh(g_outlier_stddev);
+  g_sor.filter(*output_cloud);
+  g_cloud_filtered.swap(output_cloud);
+
+}
+
+void cw2::findNormals(int g_normal_k)
+{
+  g_ne.setInputCloud(g_cloud_filtered);
+  g_ne.setSearchMethod(g_tree_ptr);
+  g_ne.setKSearch(g_normal_k);
+  g_ne.compute(*g_cloud_normals);
+}
+
+void cw2::segmentationPipeline(double g_plane_normal_dist_weight, int g_plane_max_iterations, double g_plane_distance)
+{
+  // TODO(student-9): Implement normal-plane segmentation.
+
+  //Configure model
+  g_seg.setOptimizeCoefficients(true);
+  g_seg.setModelType(pcl::SACMODEL_NORMAL_PLANE);
+  g_seg.setNormalDistanceWeight(g_plane_normal_dist_weight);
+  g_seg.setMethodType(pcl::SAC_RANSAC);
+  g_seg.setMaxIterations(g_plane_max_iterations);
+  g_seg.setDistanceThreshold(g_plane_distance);
+
+  //Set cloud to segment
+  g_seg.setInputCloud(g_cloud_filtered);
+  g_seg.setInputNormals(g_cloud_normals);
+
+  //segment
+  g_seg.segment(*g_inliers_plane, *g_coeff_plane);
+
+  //extract point cloud that is the plane with inliers
+  g_extract_pc.setInputCloud(g_cloud_filtered);
+  g_extract_pc.setIndices(g_inliers_plane);
+  g_extract_pc.setNegative(false);
+  g_extract_pc.filter(*g_cloud_plane);
+
+  //extract point cloud that is NOT the plane (outliers). Store in filtered 2
+  g_extract_pc.setNegative(true);
+  g_extract_pc.filter(*g_cloud_segmented_plane);
+
+  //remove normals from the normal cloud that are in the plane
+  //normals2 is just normals of non-plane items
+  g_extract_normals.setNegative(true);
+  g_extract_normals.setInputCloud(g_cloud_normals);
+  g_extract_normals.setIndices(g_inliers_plane);
+  g_extract_normals.filter(*g_cloud_segmented_normals);
+}
+
+std::vector<PointCPtr> cw2::extractEuclideanClusters(double clusterTolerance, int minClusterSize, int maxClusterSize)
+{
+  g_tree_ptr_euclidean->setInputCloud(g_cloud_segmented_plane);
+  //Configure clustering
+  std::vector<pcl::PointIndices> cluster_indices;
+  g_extract_euclidean.setClusterTolerance(clusterTolerance); // 2cm
+  g_extract_euclidean.setMinClusterSize(minClusterSize);
+  g_extract_euclidean.setMaxClusterSize(maxClusterSize);
+  g_extract_euclidean.setSearchMethod(g_tree_ptr_euclidean);
+  g_extract_euclidean.setInputCloud(g_cloud_segmented_plane);
+
+  //Extract clusters
+  g_extract_euclidean.extract(cluster_indices);
+  
+  int num_cluster = 0;
+
+  std::vector<PointCPtr> all_clouds;
+
+  for (const auto& cluster : cluster_indices)
+  {
+    PointCPtr cloud_cluster(new PointC);
+    for (const auto& idx : cluster.indices) {
+      cloud_cluster->push_back((*g_cloud_segmented_plane)[idx]);
+    }
+    cloud_cluster->width = cloud_cluster->size();
+    cloud_cluster->height = 1;
+    cloud_cluster->is_dense = true;
+
+
+    if (cloud_cluster->size() == 0)
+    {
+      continue;
+    }
+
+    if (num_cluster < 6)
+    {
+    
+      // For testing only
+      std_msgs::msg::Header header;
+      header.frame_id = "color";
+      header.stamp = latest_cloud->header.stamp;
+      pubFilteredPCMsg(g_pub_clusters[num_cluster], *cloud_cluster, header);
+
+    }
+    //for testing only
+
+    num_cluster = num_cluster + 1;
+
+    all_clouds.push_back(cloud_cluster);
+  }
+  
+  return all_clouds;
+
+}
+
+
+Eigen::Vector3f cw2::getCentroid(PointC &in_cloud_ptr)
+{
+  
+  Eigen::Vector4f centroid;
+  pcl::compute3DCentroid(in_cloud_ptr, centroid);
+
+  return centroid.head<3>();  // drops the homogeneous w component
+}
+
+cw2::SHAPE cw2::classifyShape(PointC &in_cloud_ptr)
+{
+
+  //Discrepancy here.
+
+
+  SHAPE shape;
+  shape.type = CROSS;
+  shape.size = 40_MM;
+
+  return shape;
+
+}
+
+//publish ros message for debug 
+void cw2::pubFilteredPCMsg(
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub,
+    PointC &pc,
+    const std_msgs::msg::Header &header)
+{
+
+  // publish type
+  sensor_msgs::msg::PointCloud2 output;
+
+  //pass input cloud, output PointCloud2 by reference
+  pcl::toROSMsg(pc, output);
+  output.header = header;
+  pc_pub->publish(output);
+
+}
+
+//debug helper
+void cw2::processCloud()
+{
+  if (!latest_cloud) {
+    RCLCPP_WARN(node_->get_logger(), "reprocessCloud: no cloud yet, skipping.");
+    return;
+  }
+  std_msgs::msg::Header header;
+  header.frame_id = "color";
+  header.stamp = latest_cloud->header.stamp;
+
+  pubFilteredPCMsg(g_pub_cloud, *g_cloud_filtered, header);
+  applyPassthrough(pcl_pass_min_, pcl_pass_max_, pcl_pass_axis_);
+  pubFilteredPCMsg(g_pub_passthrough, *g_cloud_filtered, header);
+  applyOutlierRemoval(pcl_outlier_mean_k_, pcl_outlier_stddev_);
+  pubFilteredPCMsg(g_pub_outlier, *g_cloud_filtered, header);
+  findNormals(pcl_normal_k_);
+  segmentationPipeline(pcl_plane_normal_weight_, pcl_plane_max_iterations_, pcl_plane_distance_);
+  pubFilteredPCMsg(g_pub_plane, *g_cloud_segmented_plane, header);
+  extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
+
+}
+
+//get color of a point cloud
+std::string cw2::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
+{
+
+  float r = 0;
+  float g = 0;
+  float b = 0;
+
+  //average all point colors in the cloud
+
+  for (const auto & pt : in_cloud_ptr.points)
+  {
+    r = r + (pt.r / 255.0);
+    g = g + (pt.g / 255.0);
+    b = b + (pt.b / 255.0);
+  }
+
+  r = r / in_cloud_ptr.size();
+  g = g / in_cloud_ptr.size();
+  b = b / in_cloud_ptr.size();
+
+  float min_dist = 1000;
+  int min_color_idx;
+
+  RCLCPP_INFO(node_->get_logger(), "num_pts = %d, r=%.3f g=%.3f b=%.3f", static_cast<int>(in_cloud_ptr.size()), r, g, b);
+
+
+  // find closest color
+  for (size_t i = 0; i < num_colors; i++)
+  {
+
+    std::array<float, 3> color = colors[i];
+    //distance between average and saved color
+    float dist = std::sqrt(std::pow(r - color[0], 2) + std::pow(g - color[1], 2) + std::pow(b - color[2], 2));
+
+
+    if (dist < min_dist)
+    {
+      min_dist = dist;
+      min_color_idx = i;
+    }
+
+  }
+  //check to see if closest color is in range
+  if (min_dist < threshold)
+  {
+    return color_names[min_color_idx];
+  }
+  else
+  {
+    return no_color;
+  }
+
+}
+
+void cw2::filteringPipeline()
+{
+  rosTopicToCloud(latest_cloud_msg_);
+  // applyVoxelGrid(0.05);
+  applyPassthrough(-0.31, 0.18, "y");
+  applyOutlierRemoval(20, 1.0);
+  findNormals(50);
+  segmentationPipeline(0.1, 100, 0.03);
+}
+
+//convert local coords to world coords
+Eigen::Vector3f cw2::toWorldFrame(Eigen::Vector3f local_point)
+{
+  geometry_msgs::msg::PointStamped local, world;
+  local.header.frame_id = g_input_pc_frame_id;
+  local.header.stamp = latest_cloud_msg_->header.stamp;
+  local.point.x = local_point.x();
+  local.point.y = local_point.y();
+  local.point.z = local_point.z();
+
+  try {
+    tf_buffer_->transform(local, world, "panda_link0");
+  } catch (tf2::TransformException &ex) {
+    RCLCPP_WARN(node_->get_logger(), "Transform failed: %s", ex.what());
+    return local_point;
+  }
+
+  return Eigen::Vector3f(world.point.x, world.point.y, world.point.z);
 }
