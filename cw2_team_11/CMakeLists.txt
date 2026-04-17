@@ -18,6 +18,7 @@ find_package(moveit_ros_planning_interface REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(tf2_sensor_msgs REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(PCL REQUIRED)
@@ -56,6 +57,7 @@ ament_target_dependencies(${PROJECT_NAME}_cw2_class_lib
   moveit_ros_planning_interface
   tf2
   tf2_ros
+  tf2_sensor_msgs
   tf2_geometry_msgs
   pcl_ros
   pcl_conversions
@@ -83,6 +85,7 @@ ament_target_dependencies(cw2_solution_node
   moveit_ros_planning_interface
   tf2
   tf2_ros
+  tf2_sensor_msgs
   tf2_geometry_msgs
   pcl_ros
   pcl_conversions
