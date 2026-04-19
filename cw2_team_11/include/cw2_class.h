@@ -170,8 +170,8 @@ public:
 
   //hardcode debug values
   double pcl_voxel_leaf_size_      = 0.01;
-  double pcl_pass_min_             = -0.18;
-  double pcl_pass_max_             = 0.31;
+  double pcl_pass_min_             = 0.18;
+  double pcl_pass_max_             = -0.30;
   std::string pcl_pass_axis_       = "y";
   int    pcl_outlier_mean_k_       = 20;
   double pcl_outlier_stddev_       = 1.0;

@@ -34,47 +34,47 @@ def generate_launch_description():
         DeclareLaunchArgument('pointcloud_qos_reliable', default_value='true'),
         DeclareLaunchArgument('use_software_rendering', default_value='false'),
 
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource([
-                FindPackageShare('rpl_panda_with_rs'),
-                '/launch/display.launch.py'
-            ]),
-            launch_arguments={
-                'use_sim_time': use_sim_time,
-                'use_gazebo_gui': use_gazebo_gui,
-                'use_rviz': use_rviz,
-                'enable_realsense': enable_realsense,
-                'enable_camera_processing': enable_camera_processing,
-                'camera_processing_out_cloud': camera_processing_out_cloud,
-                'use_software_rendering': use_software_rendering,
-                'extra_gazebo_model_path': PathJoinSubstitution([
-                    FindPackageShare('cw2_world_spawner'),
-                    'models',
-                ]),
-            }.items()
+        # IncludeLaunchDescription(
+        #     PythonLaunchDescriptionSource([
+        #         FindPackageShare('rpl_panda_with_rs'),
+        #         '/launch/display.launch.py'
+        #     ]),
+        #     launch_arguments={
+        #         'use_sim_time': use_sim_time,
+        #         'use_gazebo_gui': use_gazebo_gui,
+        #         'use_rviz': use_rviz,
+        #         'enable_realsense': enable_realsense,
+        #         'enable_camera_processing': enable_camera_processing,
+        #         'camera_processing_out_cloud': camera_processing_out_cloud,
+        #         'use_software_rendering': use_software_rendering,
+        #         'extra_gazebo_model_path': PathJoinSubstitution([
+        #             FindPackageShare('cw2_world_spawner'),
+        #             'models',
+        #         ]),
+        #     }.items()
+        # ),
+
+        TimerAction(
+            period=launch_delay,
+            actions=[
+                IncludeLaunchDescription(
+                    PythonLaunchDescriptionSource([
+                        FindPackageShare('cw2_world_spawner'),
+                        '/launch/world_spawner.launch.py'
+                    ])
+                )
+            ]
         ),
 
-        # TimerAction(
-        #     period=launch_delay,
-        #     actions=[
-        #         IncludeLaunchDescription(
-        #             PythonLaunchDescriptionSource([
-        #                 FindPackageShare('cw2_world_spawner'),
-        #                 '/launch/world_spawner.launch.py'
-        #             ])
-        #         )
-        #     ]
-        # ),
-
-        # Node(
-        #     package='cw2_team_11',
-        #     executable='cw2_solution_node',
-        #     name='cw2_solution_node',
-        #     output='screen',
-        #     parameters=[{
-        #         'use_sim_time': use_sim_time,
-        #         'pointcloud_topic': pointcloud_topic,
-        #         'pointcloud_qos_reliable': pointcloud_qos_reliable,
-        #     }],
-        # ),
+        Node(
+            package='cw2_team_11',
+            executable='cw2_solution_node',
+            name='cw2_solution_node',
+            output='screen',
+            parameters=[{
+                'use_sim_time': use_sim_time,
+                'pointcloud_topic': pointcloud_topic,
+                'pointcloud_qos_reliable': pointcloud_qos_reliable,
+            }],
+        ),
     ])

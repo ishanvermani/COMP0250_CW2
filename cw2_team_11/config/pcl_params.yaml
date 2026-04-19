@@ -2,7 +2,7 @@
   ros__parameters:
     pcl:
       voxel_leaf_size:      0.01
-      pass_min:             -0.31
+      pass_min:             -0.25
       pass_max:             0.18
       pass_axis:            "y"
       outlier_mean_k:       20

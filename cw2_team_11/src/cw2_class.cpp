@@ -183,12 +183,37 @@ void cw2::t1_callback(
     sequence = g_cloud_sequence_;
   }
 
-  RCLCPP_WARN(
-    node_->get_logger(),
-    "Task 1 is not implemented in cw2_team_11. Latest cloud: seq=%llu frame='%s' points=%zu",
-    static_cast<unsigned long long>(sequence),
-    frame_id.c_str(),
-    point_count);
+
+  static const std::string planning_group = "panda_arm";
+  moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
+
+
+  move_group2.setPlanningTime(5.0);
+  move_group2.setMaxVelocityScalingFactor(0.2);
+  move_group2.setMaxAccelerationScalingFactor(0.2);
+  if (!moveToBirdeye(move_group2, 0))
+  {
+    //failed to get to birdseye postion - manually defined position by joint angles
+    return;
+  }
+
+  filteringPipeline();
+
+  std::vector<PointCPtr> shapes = extractEuclideanClusters(pcl_cluster_tolerance_, 100, 25000);
+
+  for (int i = 0; i < shapes.size(); i++)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %d", i);
+    classifyShape(*shapes[i]);
+  }
+  
+
+  // RCLCPP_WARN(
+  //   node_->get_logger(),
+  //   "Task 1 is not implemented in cw2_team_11. Latest cloud: seq=%llu frame='%s' points=%zu",
+  //   static_cast<unsigned long long>(sequence),
+  //   frame_id.c_str(),
+  //   point_count);
 }
 
 void cw2::t2_callback(
@@ -448,7 +473,83 @@ Eigen::Vector3f cw2::getCentroid(PointC &in_cloud_ptr)
 cw2::SHAPE cw2::classifyShape(PointC &in_cloud_ptr)
 {
 
-  //Discrepancy here.
+  /*
+    ok heres the plan
+
+    what do I want??
+  
+    - PCA axes - to get a PoseStamped
+    - OBB? Not really
+    - Classify shape
+    - To classify shape, I want to get variance along the principle axes
+
+    - this can be eigenvalue, or covariance on transformed pointcloud
+    - lets assume the simple case - eigenvalue
+
+
+    1) transform
+    2) get eigenvalue
+
+
+    lets print eigenvalues and covar matrices. 
+    Lets print covar matrix too
+
+    change rotation
+
+    need obb w h d to get the size, so obb is needed
+    print obb rotation too
+  
+  
+  
+  */
+
+
+  // 1 lets do OBB
+
+  // do I need to do this in the world frame
+  // can test by varying height
+
+  Eigen::Vector3f centroid;
+  Eigen::Vector3f obb_centre;
+  Eigen::Vector3f obb_dimensions;
+  Eigen::Vector3f obb_rotational_matrix;
+
+  // pcl::computeCentroidAndOBB(in_cloud_ptr, centroid, obb_centre, obb_dimensions, obb_rotational_matrix);
+
+  // RCLCPP_INFO(node_->get_logger(), "Reported Centroid: x %.3f y %.3f z%.3f", centroid.x(), centroid.y(), centroid.z());
+
+  // RCLCPP_INFO(node_->get_logger(), "Reported obb: x %.3f y %.3f z%.3f", obb_centre.x(), obb_centre.y(), obb_centre.z());
+
+  // RCLCPP_INFO(node_->get_logger(), "Reported Dimensions: x %.3f y %.3f z%.3f", obb_dimensions.x(), obb_dimensions.y(), obb_dimensions.z());
+
+  // RCLCPP_INFO(node_->get_logger(), "Reported Rot: x %.3f y %.3f z%.3f", obb_rotational_matrix.x(), obb_rotational_matrix.y(), obb_rotational_matrix.z());
+
+  // RCLCPP_INFO(node_->get_logger(), "Reported Centroid: x %.3f y %.3f z%.3f", centroid.x(), centroid.y(), centroid.z());
+
+
+  Eigen::Matrix3f covariance;
+  Eigen::Vector4f centroid_4;
+
+  centroid = getCentroid(in_cloud_ptr);
+
+  centroid_4.x() = centroid.x();
+  centroid_4.y() = centroid.y();
+  centroid_4.z() = centroid.z();
+
+  pcl::computeCovarianceMatrixNormalized(in_cloud_ptr, centroid_4, covariance);
+
+  RCLCPP_INFO(node_->get_logger(), "Covar Matrix: %.3f %.3f %.3f \n %.3f %.3f %.3f \n %.3f %.3f %.3f", covariance(0, 0), covariance(0, 1), covariance(0, 2), covariance(1, 0), covariance(1, 1), covariance(1, 2), covariance(2, 0), covariance(2, 1), covariance(2, 2));
+
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> eigen_solver(covariance, Eigen::ComputeEigenvectors);
+  Eigen::Matrix3f eigenVectorsPCA = eigen_solver.eigenvectors();
+  Eigen::Vector3f eigenvalues = eigen_solver.eigenvalues();
+  eigenVectorsPCA.col(2) = eigenVectorsPCA.col(0).cross(eigenVectorsPCA.col(1));  /// This line is necessary for proper orientation in some cases. The numbers come out the same without it, but
+                                                                                ///    the signs are different and the box doesn't get correctly oriented in some cases.
+
+
+  RCLCPP_INFO(node_->get_logger(), "Eigenvalues: 1 %.3f 2 %.3f 3 %.3f", eigenvalues(0), eigenvalues(1), eigenvalues(2));
+
+  RCLCPP_INFO(node_->get_logger(), "Eigenvectors: %.3f %.3f %.3f \n %.3f %.3f %.3f \n %.3f %.3f %.3f", eigenVectorsPCA(0, 0), eigenVectorsPCA(0, 1), eigenVectorsPCA(0, 2), eigenVectorsPCA(1, 0), eigenVectorsPCA(1, 1), eigenVectorsPCA(1, 2), eigenVectorsPCA(2, 0), eigenVectorsPCA(2, 1), eigenVectorsPCA(2, 2));
 
 
   cw2::SHAPE shape;
@@ -558,10 +659,10 @@ void cw2::filteringPipeline()
 {
   // rosTopicToCloud(latest_cloud_msg_);
   // applyVoxelGrid(0.05);
-  applyPassthrough(-0.31, 0.18, "y");
+  applyPassthrough(-0.25, 0.20, "y");
   applyOutlierRemoval(20, 1.0);
   findNormals(50);
-  segmentationPipeline(0.1, 100, 0.03);
+  segmentationPipeline(0.1, 100, pcl_plane_distance_);
 }
 
 //convert local coords to world coords
