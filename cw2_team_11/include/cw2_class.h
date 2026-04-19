@@ -70,7 +70,8 @@ public:
     std::shared_ptr<cw2_world_spawner::srv::Task3Service::Response> response);
 
   void cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
-
+  
+  void rosTopicToCloud(const sensor_msgs::msg::PointCloud2::ConstSharedPtr cloud_input_msg);
   void applyVoxelGrid(double leaf_size);
   void applyPassthrough(double pass_min, double pass_max, std::string pass_axis);
   void applyOutlierRemoval(int mean_k, double stddev);
@@ -181,7 +182,7 @@ public:
   double pcl_plane_distance_       = 0.03;
   double pcl_cluster_tolerance_    = 0.02;
   int    pcl_cluster_min_size_     = 100;
-  int    pcl_cluster_max_size_     = 25000;
+  int    pcl_cluster_max_size_     = 60000;
 
 
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> arm_group_;

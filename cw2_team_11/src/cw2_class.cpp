@@ -158,7 +158,7 @@ void cw2::cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg
   PointCPtr latest_cloud(new PointC);
   pcl::fromPCLPointCloud2(pcl_cloud, *latest_cloud);
 
-  *g_cloud_filtered = *latest_cloud;
+  // *g_cloud_filtered = *latest_cloud;
 
   std::lock_guard<std::mutex> lock(cloud_mutex_);
   g_input_pc_frame_id_ = msg->header.frame_id;
@@ -183,6 +183,8 @@ void cw2::t1_callback(
     sequence = g_cloud_sequence_;
   }
 
+  RCLCPP_INFO(node_->get_logger(), "moving camera above (%.3f %.3f %.3f)", request->object_point.point.x, request->object_point.point.y, request->object_point.point.z);
+
 
   static const std::string planning_group = "panda_arm";
   moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
@@ -191,19 +193,57 @@ void cw2::t1_callback(
   move_group2.setPlanningTime(5.0);
   move_group2.setMaxVelocityScalingFactor(0.2);
   move_group2.setMaxAccelerationScalingFactor(0.2);
-  if (!moveToBirdeye(move_group2, 0))
+  // if (!moveToBirdeye(move_group2, 0))
+  // {
+  //   //failed to get to birdseye postion - manually defined position by joint angles
+  //   return;
+  // }
+
+  geometry_msgs::msg::Pose target_pose;
+
+  target_pose.position.x = request->object_point.point.x;
+  target_pose.position.y = request->object_point.point.y;
+  target_pose.position.z = request->object_point.point.z + 0.5;
+
+  double roll = M_PI;
+  double pitch = 0;
+  double yaw = -M_PI / 4; //-45 deg
+
+  double w = std::cos(roll / 2.0) * std::cos(pitch / 2.0) * std::cos(yaw / 2.0) + std::sin(roll / 2.0) * std::sin(pitch / 2.0) * std::sin(yaw / 2.0);
+
+  double x = std::sin(roll / 2.0) * std::cos(pitch / 2.0) * std::cos(yaw / 2.0) - std::cos(roll / 2.0) * std::sin(pitch / 2.0) * std::sin(yaw / 2.0);
+  double y = std::cos(roll / 2.0) * std::sin(pitch / 2.0) * std::cos(yaw / 2.0) + std::sin(roll / 2.0) * std::cos(pitch / 2.0) * std::sin(yaw / 2.0);
+  double z = std::cos(roll / 2.0) * std::cos(pitch / 2.0) * std::sin(yaw / 2.0) - std::sin(roll / 2.0) * std::sin(pitch / 2.0) * std::cos(yaw / 2.0);
+
+  target_pose.orientation.x = x;
+  target_pose.orientation.y = y;
+  target_pose.orientation.z = z;
+  target_pose.orientation.w = w;
+
+  move_group2.setPoseTarget(target_pose);
+
+  moveit::planning_interface::MoveGroupInterface::Plan plan;
+
+  if (move_group2.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS)
   {
-    //failed to get to birdseye postion - manually defined position by joint angles
-    return;
+    if (move_group2.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS)
+    {
+      rclcpp::sleep_for(std::chrono::milliseconds(1000));
+    }
   }
 
-  filteringPipeline();
 
-  std::vector<PointCPtr> shapes = extractEuclideanClusters(pcl_cluster_tolerance_, 100, 25000);
+  // filteringPipeline();
 
-  for (int i = 0; i < shapes.size(); i++)
+  processCloud();
+
+  RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
+
+  std::vector<PointCPtr> shapes = extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
+
+  for (size_t i = 0; i < shapes.size(); i++)
   {
-    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %d", i);
+    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
     classifyShape(*shapes[i]);
   }
   
@@ -319,6 +359,17 @@ bool cw2::moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_gro
 
 //PCL FUNCTIONS
 
+void cw2::rosTopicToCloud(const sensor_msgs::msg::PointCloud2::ConstSharedPtr cloud_input_msg)
+{
+  g_input_pc_frame_id = cloud_input_msg->header.frame_id;
+
+  pcl::fromROSMsg(*cloud_input_msg, *g_cloud_ptr);
+
+  *g_cloud_filtered = *g_cloud_ptr;
+
+  RCLCPP_INFO_STREAM(node_->get_logger(), "saved cloud");
+}
+
 
 void cw2::applyVoxelGrid(double g_leaf_size)
 {
@@ -341,6 +392,7 @@ void cw2::applyPassthrough(double g_pass_min, double g_pass_max, std::string g_p
   g_pt.setInputCloud(g_cloud_filtered);
   g_pt.setFilterFieldName(g_pass_axis);
   g_pt.setFilterLimits(g_pass_min, g_pass_max);
+  g_pt.setNegative(true);
   g_pt.filter(*output_cloud);
   g_cloud_filtered.swap(output_cloud);
 
@@ -527,7 +579,6 @@ cw2::SHAPE cw2::classifyShape(PointC &in_cloud_ptr)
   // RCLCPP_INFO(node_->get_logger(), "Reported Centroid: x %.3f y %.3f z%.3f", centroid.x(), centroid.y(), centroid.z());
 
 
-  Eigen::Matrix3f covariance;
   Eigen::Vector4f centroid_4;
 
   centroid = getCentroid(in_cloud_ptr);
@@ -536,8 +587,14 @@ cw2::SHAPE cw2::classifyShape(PointC &in_cloud_ptr)
   centroid_4.y() = centroid.y();
   centroid_4.z() = centroid.z();
 
+
+  Eigen::Matrix3f covariance_raw;
+  Eigen::Matrix3f covariance;
+
+  pcl::computeCovarianceMatrix(in_cloud_ptr, centroid_4, covariance_raw);
   pcl::computeCovarianceMatrixNormalized(in_cloud_ptr, centroid_4, covariance);
 
+  RCLCPP_INFO(node_->get_logger(), "RAW COVAR Matrix: %.3f %.3f %.3f \n %.3f %.3f %.3f \n %.3f %.3f %.3f", covariance_raw(0, 0), covariance_raw(0, 1), covariance_raw(0, 2), covariance(1, 0), covariance_raw(1, 1), covariance(1, 2), covariance_raw(2, 0), covariance_raw(2, 1), covariance_raw(2, 2));
   RCLCPP_INFO(node_->get_logger(), "Covar Matrix: %.3f %.3f %.3f \n %.3f %.3f %.3f \n %.3f %.3f %.3f", covariance(0, 0), covariance(0, 1), covariance(0, 2), covariance(1, 0), covariance(1, 1), covariance(1, 2), covariance(2, 0), covariance(2, 1), covariance(2, 2));
 
   Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> eigen_solver(covariance, Eigen::ComputeEigenvectors);
@@ -588,8 +645,20 @@ void cw2::processCloud()
   header.frame_id = "color";
   header.stamp = latest_cloud_msg_->header.stamp;
 
+  rosTopicToCloud(latest_cloud_msg_);
+
+  PointT min, max;
+  pcl::getMinMax3D(*g_cloud_filtered, min, max);
+
+  RCLCPP_INFO(node_->get_logger(), "Min: (%.3f, %.3f, %.3f)", min.x, min.y, min.z);
+  RCLCPP_INFO(node_->get_logger(), "Max: (%.3f, %.3f, %.3f)", max.x, max.y, max.z);
+
+
+
   pubFilteredPCMsg(g_pub_cloud, *g_cloud_filtered, header);
-  applyPassthrough(pcl_pass_min_, pcl_pass_max_, pcl_pass_axis_);
+  // applyVoxelGrid(pcl_voxel_leaf_size_);
+
+  // applyPassthrough(pcl_pass_min_, pcl_pass_max_, pcl_pass_axis_);
   pubFilteredPCMsg(g_pub_passthrough, *g_cloud_filtered, header);
   applyOutlierRemoval(pcl_outlier_mean_k_, pcl_outlier_stddev_);
   pubFilteredPCMsg(g_pub_outlier, *g_cloud_filtered, header);
@@ -657,7 +726,7 @@ std::string cw2::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
 
 void cw2::filteringPipeline()
 {
-  // rosTopicToCloud(latest_cloud_msg_);
+  rosTopicToCloud(latest_cloud_msg_);
   // applyVoxelGrid(0.05);
   applyPassthrough(-0.25, 0.20, "y");
   applyOutlierRemoval(20, 1.0);
