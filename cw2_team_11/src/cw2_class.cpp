@@ -214,8 +214,6 @@ void cw2::t1_callback(
   target_pose.orientation.z = z;
   target_pose.orientation.w = w;  
  
-    
-  
   move_group2.setPoseTarget(target_pose);
   moveit::planning_interface::MoveGroupInterface::Plan plan;
 
@@ -234,99 +232,162 @@ void cw2::t2_callback(
   const std::shared_ptr<cw2_world_spawner::srv::Task2Service::Request> request,
   std::shared_ptr<cw2_world_spawner::srv::Task2Service::Response> response)
 {
-  (void)request;
-  response->mystery_object_num = -1;
+  auto L = node_->get_logger();
+  RCLCPP_INFO(L, "Starting Task 2");
 
-  std::string frame_id;
-  std::size_t point_count = 0;
-  std::uint64_t sequence = 0;
-  {
-    std::lock_guard<std::mutex> lock(cloud_mutex_);
-    frame_id = g_input_pc_frame_id_;
-    point_count = g_cloud_ptr ? g_cloud_ptr->size() : 0;
-    sequence = g_cloud_sequence_;
-  }
-
-  
   static const std::string planning_group = "panda_arm";
   moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
-
 
   move_group2.setPlanningTime(5.0);
   move_group2.setMaxVelocityScalingFactor(0.2);
   move_group2.setMaxAccelerationScalingFactor(0.2);
-  if (!moveToBirdeye(move_group2, 80))
-  {
-    //failed to get to birdseye postion - manually defined position by joint angles
-    return;
-  }
-  // RCLCPP_WARN(
-  //   node_->get_logger(),
-  //   "Task 2 is not implemented in cw2_team_11. Latest cloud: seq=%llu frame='%s' points=%zu",
-  //   static_cast<unsigned long long>(sequence),
-  //   frame_id.c_str(),
-  //   point_count);
+  
+  geometry_msgs::msg::Pose target_pose; // Declare target_pose here so it can be reused for all three moves (we will just update the position each time)
+
+  double roll = M_PI; // 180 degrees
+  double pitch = 0.0;
+  double yaw = -M_PI / 4.0; // -45 degrees
+
+  double half_roll = roll / 2.0;
+  double half_pitch = pitch / 2.0;
+  double half_yaw = yaw / 2.0;
+
+
+  double w = std::cos(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double x = std::sin(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) - std::cos(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double y = std::cos(half_roll) * std::sin(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::cos(half_pitch) * std::sin(half_yaw);
+  double z = std::cos(half_roll) * std::cos(half_pitch) * std::sin(half_yaw) - std::sin(half_roll) * std::sin(half_pitch) * std::cos(half_yaw);
+ 
+  target_pose.orientation.x = x; 
+  target_pose.orientation.y = y;
+  target_pose.orientation.z = z;
+  target_pose.orientation.w = w;  
+
+    //Reference object 1
+  
+  target_pose.position.x = request->ref_object_points[0].point.x;
+  target_pose.position.y = request->ref_object_points[0].point.y;
+  target_pose.position.z = request->ref_object_points[0].point.z + 0.5;
+  move_group2.setPoseTarget(target_pose);
+  moveit::planning_interface::MoveGroupInterface::Plan plan1;
+
+  bool success = (move_group2.plan(plan1) == moveit::core::MoveItErrorCode::SUCCESS);
+  move_group2.execute(plan1);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+  
+  //Reference object 2
+  target_pose.position.x = request->ref_object_points[1].point.x;
+  target_pose.position.y = request->ref_object_points[1].point.y;
+  target_pose.position.z = request->ref_object_points[1].point.z + 0.5;
+
+  move_group2.setPoseTarget(target_pose);
+  moveit::planning_interface::MoveGroupInterface::Plan plan2;
+
+  success = (move_group2.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS);
+  move_group2.execute(plan2);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+  //Mystery object
+  target_pose.position.x = request->mystery_object_point.point.x;
+  target_pose.position.y = request->mystery_object_point.point.y;
+  target_pose.position.z = request->mystery_object_point.point.z + 0.5;
+
+  move_group2.setPoseTarget(target_pose);
+  moveit::planning_interface::MoveGroupInterface::Plan plan3;
+
+  success = (move_group2.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS);
+  move_group2.execute(plan3);
+  
 }
+
 
 void cw2::t3_callback(
   const std::shared_ptr<cw2_world_spawner::srv::Task3Service::Request> request,
   std::shared_ptr<cw2_world_spawner::srv::Task3Service::Response> response)
 {
   (void)request;
-  response->total_num_shapes = 0;
-  response->num_most_common_shape = 0;
-  response->most_common_shape_vector.clear();
+  auto L = node_->get_logger();
+  RCLCPP_INFO(L, "Starting Task 3: Explicit Perimeter Sweep...");
 
-  std::string frame_id;
-  std::size_t point_count = 0;
-  std::uint64_t sequence = 0;
-  {
-    std::lock_guard<std::mutex> lock(cloud_mutex_);
-    frame_id = g_input_pc_frame_id_;
-    point_count = g_cloud_ptr ? g_cloud_ptr->size() : 0;
-    sequence = g_cloud_sequence_;
-  }
+  static const std::string planning_group = "panda_arm";
+  moveit::planning_interface::MoveGroupInterface move_group3(node_, planning_group);
 
-  RCLCPP_WARN(
-    node_->get_logger(),
-    "Task 3 is not implemented in cw2_team_11. Latest cloud: seq=%llu frame='%s' points=%zu",
-    static_cast<unsigned long long>(sequence),
-    frame_id.c_str(),
-    point_count);
-}
+  move_group3.setPlanningTime(10.0); //maybe chabge that to 5 seconds
+  move_group3.setMaxVelocityScalingFactor(0.2);
+  move_group3.setMaxAccelerationScalingFactor(0.2);
+  
+  geometry_msgs::msg::Pose target_pose; // Declare target_pose here so it can be reused for all three moves (we will just update the position each time)
+
+  double roll = M_PI; // 180 degrees
+  double pitch = 0.0;
+  double yaw = -M_PI / 4.0; // -45 degrees
+
+  double half_roll = roll / 2.0;
+  double half_pitch = pitch / 2.0;
+  double half_yaw = yaw / 2.0;
 
 
-bool cw2::moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group, float theta=0.0)
-{
-  RCLCPP_INFO(node_->get_logger(), "Moving to 'birdeye' joint pose");
+  double w = std::cos(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double x = std::sin(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) - std::cos(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double y = std::cos(half_roll) * std::sin(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::cos(half_pitch) * std::sin(half_yaw);
+  double z = std::cos(half_roll) * std::cos(half_pitch) * std::sin(half_yaw) - std::sin(half_roll) * std::sin(half_pitch) * std::cos(half_yaw);
+ 
+  target_pose.orientation.x = x; 
+  target_pose.orientation.y = y;
+  target_pose.orientation.z = z;
+  target_pose.orientation.w = w; 
 
-  std::vector<double> joint_positions = {
-    theta * M_PI / 180.0, //panda_joint_1
-    0 * M_PI / 180.0, //panda_joint_2
-    0 * M_PI / 180.0, //panda_joint_3
-    -45.0 * M_PI / 180.0, //panda_joint_4
-    0 * M_PI / 180.0, //panda_joint_5
-    45.0 * M_PI / 180.0, //panda_joint_6
-    45.0 * M_PI / 180.0 //panda_joint_7
-  };
+//Move 1
 
-  move_group.setJointValueTarget(joint_positions);
+target_pose.position.x = 0.45;
+target_pose.position.y = 0.35;
+target_pose.position.z = 0.65;
 
-  moveit::planning_interface::MoveGroupInterface::Plan plan;
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan1;
 
-  if (move_group.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS)
-  {
-    if (move_group.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS)
-    {
-      rclcpp::sleep_for(std::chrono::milliseconds(1000));
-      return true;
-    }
-  }
+bool success = (move_group3.plan(plan1) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan1);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-  RCLCPP_ERROR(node_->get_logger(), "Failed to move to 'birdeye' joint pose");
+//Move 2
+target_pose.position.x = 0.45;
+target_pose.position.y = -0.35;
+target_pose.position.z = 0.65;
 
-  return false;
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan2;
 
+success = (move_group3.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan2);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+//Move 3
+
+target_pose.position.x = -0.45;`
+target_pose.position.y = -0.35;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan3;
+
+success = (move_group3.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan3);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+//Move 4
+
+target_pose.position.x = -0.45;
+target_pose.position.y = 0.35;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan4;
+
+success = (move_group3.plan(plan4) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan4);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 }
 
 //PCL FUNCTIONS
