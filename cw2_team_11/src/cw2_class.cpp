@@ -340,7 +340,7 @@ void cw2::t3_callback(
 
 //Move 1
 
-target_pose.position.x = 0.45;
+target_pose.position.x = -0.45;
 target_pose.position.y = 0.35;
 target_pose.position.z = 0.65;
 
@@ -351,9 +351,9 @@ bool success = (move_group3.plan(plan1) == moveit::core::MoveItErrorCode::SUCCES
 move_group3.execute(plan1);
 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-//Move 2
-target_pose.position.x = 0.45;
-target_pose.position.y = -0.35;
+//Move 1.2
+target_pose.position.x = 0;
+target_pose.position.y = 0.35;
 target_pose.position.z = 0.65;
 
 move_group3.setPoseTarget(target_pose);
@@ -363,10 +363,9 @@ success = (move_group3.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS);
 move_group3.execute(plan2);
 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-//Move 3
-
-target_pose.position.x = -0.45;
-target_pose.position.y = -0.35;
+//Move 2
+target_pose.position.x = 0.45;
+target_pose.position.y = 0.35;
 target_pose.position.z = 0.65;
 
 move_group3.setPoseTarget(target_pose);
@@ -376,10 +375,10 @@ success = (move_group3.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS);
 move_group3.execute(plan3);
 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-//Move 4
+//Move 2.2
 
-target_pose.position.x = -0.45;
-target_pose.position.y = 0.35;
+target_pose.position.x = 0.45;
+target_pose.position.y = 0;
 target_pose.position.z = 0.65;
 
 move_group3.setPoseTarget(target_pose);
@@ -387,6 +386,58 @@ moveit::planning_interface::MoveGroupInterface::Plan plan4;
 
 success = (move_group3.plan(plan4) == moveit::core::MoveItErrorCode::SUCCESS);
 move_group3.execute(plan4);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+//Move 3
+
+target_pose.position.x = 0.45;
+target_pose.position.y = -0.35;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan5;
+
+success = (move_group3.plan(plan5) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan5);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+//Move 3.2
+
+target_pose.position.x = 0;
+target_pose.position.y = -0.35;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan6;
+
+success = (move_group3.plan(plan6) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan6);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+//Move 4
+
+target_pose.position.x = -0.45;
+target_pose.position.y = -0.35;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan7;
+
+success = (move_group3.plan(plan7) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan7);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+//Move 4.2
+
+target_pose.position.x = -0.45;
+target_pose.position.y = 0;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan8;
+
+success = (move_group3.plan(plan8) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan8);
 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 }
 
