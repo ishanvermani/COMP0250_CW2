@@ -365,7 +365,7 @@ std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
 //Move 3
 
-target_pose.position.x = -0.45;`
+target_pose.position.x = -0.45;
 target_pose.position.y = -0.35;
 target_pose.position.z = 0.65;
 
