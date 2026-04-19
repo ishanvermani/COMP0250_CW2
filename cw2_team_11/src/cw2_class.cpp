@@ -21,6 +21,7 @@ COMP0250 Coursework 2 - Team 11
 
 
 #include <cw2_class.h>
+#include <cmath>
 
 
 
@@ -166,29 +167,67 @@ void cw2::cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg
   ++g_cloud_sequence_;
 }
 
+
 void cw2::t1_callback(
   const std::shared_ptr<cw2_world_spawner::srv::Task1Service::Request> request,
   std::shared_ptr<cw2_world_spawner::srv::Task1Service::Response> response)
 {
-  (void)request;
+
   (void)response;
+  auto L = node_->get_logger();
 
-  std::string frame_id;
-  std::size_t point_count = 0;
-  std::uint64_t sequence = 0;
-  {
-    std::lock_guard<std::mutex> lock(cloud_mutex_);
-    frame_id = g_input_pc_frame_id_;
-    point_count = g_cloud_ptr ? g_cloud_ptr->size() : 0;
-    sequence = g_cloud_sequence_;
-  }
+    RCLCPP_INFO(L, " Moving camera right above shape at (%.3f, %.3f, %.3f)",
+              request->object_point.point.x,
+              request->object_point.point.y,
+              request->object_point.point.z);
 
-  RCLCPP_WARN(
-    node_->get_logger(),
-    "Task 1 is not implemented in cw2_team_11. Latest cloud: seq=%llu frame='%s' points=%zu",
-    static_cast<unsigned long long>(sequence),
-    frame_id.c_str(),
-    point_count);
+  
+  static const std::string planning_group = "panda_arm";
+  moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
+
+  move_group2.setPlanningTime(5.0);
+  move_group2.setMaxVelocityScalingFactor(0.2);
+  move_group2.setMaxAccelerationScalingFactor(0.2);
+  
+  
+  geometry_msgs::msg::Pose target_pose;
+  target_pose.position.x = request->object_point.point.x;
+  target_pose.position.y = request->object_point.point.y;
+  target_pose.position.z = request->object_point.point.z + 0.5;
+
+  double roll = M_PI; // 180 degrees
+  double pitch = 0;
+  double yaw = - M_PI / 4; // -45 degrees
+
+  //for the quaternions
+  double half_roll = roll / 2.0;
+  double half_pitch = pitch / 2.0;
+  double half_yaw = yaw / 2.0;
+
+  double w = std::cos(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double x = std::sin(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) - std::cos(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double y = std::cos(half_roll) * std::sin(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::cos(half_pitch) * std::sin(half_yaw);
+  double z = std::cos(half_roll) * std::cos(half_pitch) * std::sin(half_yaw) - std::sin(half_roll) * std::sin(half_pitch) * std::cos(half_yaw);
+
+  target_pose.orientation.x = x; 
+  target_pose.orientation.y = y;
+  target_pose.orientation.z = z;
+  target_pose.orientation.w = w;  
+ 
+    
+  
+  move_group2.setPoseTarget(target_pose);
+  moveit::planning_interface::MoveGroupInterface::Plan plan;
+
+  bool success = (move_group2.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  move_group2.execute(plan);
+
+  //RCLCPP_WARN(
+    //node_->get_logger(),
+    //"Task 1 is not implemented in cw2_team_11. Latest cloud: seq=%llu frame='%s' points=%zu",
+    //static_cast<unsigned long long>(sequence),
+    //frame_id.c_str(),
+    //point_count);
 }
 
 void cw2::t2_callback(
@@ -221,8 +260,6 @@ void cw2::t2_callback(
     //failed to get to birdseye postion - manually defined position by joint angles
     return;
   }
-
-
   // RCLCPP_WARN(
   //   node_->get_logger(),
   //   "Task 2 is not implemented in cw2_team_11. Latest cloud: seq=%llu frame='%s' points=%zu",
