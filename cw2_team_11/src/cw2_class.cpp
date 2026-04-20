@@ -315,7 +315,17 @@ void cw2::t2_callback(
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
 
-  classifyShape();
+  processCloud();
+
+  RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
+
+  std::vector<PointCPtr> shapes = extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
+
+  for (size_t i = 0; i < shapes.size(); i++)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+    classifyShape(*shapes[i]);
+  }
 
   
   //Reference object 2
@@ -330,7 +340,17 @@ void cw2::t2_callback(
   move_group2.execute(plan2);
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-  classifyShape();
+  processCloud();
+
+  RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
+
+  shapes = extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
+
+  for (size_t i = 0; i < shapes.size(); i++)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+    classifyShape(*shapes[i]);
+  }
 
   //Mystery object
   target_pose.position.x = request->mystery_object_point.point.x;
@@ -343,7 +363,17 @@ void cw2::t2_callback(
   success = (move_group2.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS);
   move_group2.execute(plan3);
 
-  classifyShape();
+  processCloud();
+
+  RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
+
+  shapes = extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
+
+  for (size_t i = 0; i < shapes.size(); i++)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+    classifyShape(*shapes[i]);
+  }
 }
 
 void cw2::t3_callback(
@@ -653,7 +683,7 @@ cw2::SHAPE cw2::classifyShape(PointC &in_cloud_ptr)
   RCLCPP_INFO(node_->get_logger(), "Eigenvalues: 1 %.3f 2 %.3f 3 %.3f", eigenvalues(0), eigenvalues(1), eigenvalues(2));
 
 
-  g_inertia_estimator.setInputCloud(in_cloud_ptr);
+  g_inertia_estimator.setInputCloud(in_cloud_ptr.makeShared());
   g_inertia_estimator.compute();
 
 
