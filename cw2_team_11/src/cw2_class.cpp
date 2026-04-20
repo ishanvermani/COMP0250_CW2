@@ -587,14 +587,10 @@ cw2::SHAPE cw2::classifyShape(PointC &in_cloud_ptr)
   centroid_4.y() = centroid.y();
   centroid_4.z() = centroid.z();
 
-
-  Eigen::Matrix3f covariance_raw;
   Eigen::Matrix3f covariance;
 
-  pcl::computeCovarianceMatrix(in_cloud_ptr, centroid_4, covariance_raw);
   pcl::computeCovarianceMatrixNormalized(in_cloud_ptr, centroid_4, covariance);
 
-  RCLCPP_INFO(node_->get_logger(), "RAW COVAR Matrix: %.3f %.3f %.3f \n %.3f %.3f %.3f \n %.3f %.3f %.3f", covariance_raw(0, 0), covariance_raw(0, 1), covariance_raw(0, 2), covariance(1, 0), covariance_raw(1, 1), covariance(1, 2), covariance_raw(2, 0), covariance_raw(2, 1), covariance_raw(2, 2));
   RCLCPP_INFO(node_->get_logger(), "Covar Matrix: %.3f %.3f %.3f \n %.3f %.3f %.3f \n %.3f %.3f %.3f", covariance(0, 0), covariance(0, 1), covariance(0, 2), covariance(1, 0), covariance(1, 1), covariance(1, 2), covariance(2, 0), covariance(2, 1), covariance(2, 2));
 
   Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> eigen_solver(covariance, Eigen::ComputeEigenvectors);
@@ -606,8 +602,46 @@ cw2::SHAPE cw2::classifyShape(PointC &in_cloud_ptr)
 
   RCLCPP_INFO(node_->get_logger(), "Eigenvalues: 1 %.3f 2 %.3f 3 %.3f", eigenvalues(0), eigenvalues(1), eigenvalues(2));
 
-  RCLCPP_INFO(node_->get_logger(), "Eigenvectors: %.3f %.3f %.3f \n %.3f %.3f %.3f \n %.3f %.3f %.3f", eigenVectorsPCA(0, 0), eigenVectorsPCA(0, 1), eigenVectorsPCA(0, 2), eigenVectorsPCA(1, 0), eigenVectorsPCA(1, 1), eigenVectorsPCA(1, 2), eigenVectorsPCA(2, 0), eigenVectorsPCA(2, 1), eigenVectorsPCA(2, 2));
 
+  g_inertia_estimator.setInputCloud(in_cloud_ptr);
+  g_inertia_estimator.compute();
+
+
+  std::vector<float> eccentricity;
+  PointT min_OBB, max_OBB, position_OBB;
+  Eigen::Matrix3f rotation_OBB;
+  float major_eigen, middle_eigen, minor_eigen;
+  float yaw;
+
+  g_inertia_estimator.getEccentricity(eccentricity);
+  g_inertia_estimator.getOBB(min_OBB, max_OBB, position_OBB, rotation_OBB);
+  g_inertia_estimator.getEigenValues(major_eigen, middle_eigen, minor_eigen);
+
+  yaw = atan2(rotation_OBB(1, 0), rotation_OBB(0, 0));
+
+  // Print eccentricity
+  if (eccentricity.size() == 3) {
+    RCLCPP_INFO(node_->get_logger(), "Eccentricity: %.3f %.3f %.3f", eccentricity[0], eccentricity[1], eccentricity[2]);
+  } else {
+    RCLCPP_INFO(node_->get_logger(), "Eccentricity: size=%zu", eccentricity.size());
+  }
+
+  // Print OBB min, max, position
+  RCLCPP_INFO(node_->get_logger(), "OBB min: (%.3f, %.3f, %.3f)", min_OBB.x, min_OBB.y, min_OBB.z);
+  RCLCPP_INFO(node_->get_logger(), "OBB max: (%.3f, %.3f, %.3f)", max_OBB.x, max_OBB.y, max_OBB.z);
+  RCLCPP_INFO(node_->get_logger(), "OBB position: (%.3f, %.3f, %.3f)", position_OBB.x, position_OBB.y, position_OBB.z);
+
+  // Print OBB rotation matrix
+  RCLCPP_INFO(node_->get_logger(), "OBB rotation matrix: [%.3f %.3f %.3f; %.3f %.3f %.3f; %.3f %.3f %.3f]", 
+    rotation_OBB(0,0), rotation_OBB(0,1), rotation_OBB(0,2),
+    rotation_OBB(1,0), rotation_OBB(1,1), rotation_OBB(1,2),
+    rotation_OBB(2,0), rotation_OBB(2,1), rotation_OBB(2,2));
+
+  // Print eigenvalues (major, middle, minor)
+  RCLCPP_INFO(node_->get_logger(), "Eigenvalues: major=%.3f middle=%.3f minor=%.3f", major_eigen, middle_eigen, minor_eigen);
+
+  // Print yaw
+  RCLCPP_INFO(node_->get_logger(), "Yaw: %.3f", yaw);
 
   cw2::SHAPE shape;
   shape.type = cw2::SHAPE_TYPE::CROSS;

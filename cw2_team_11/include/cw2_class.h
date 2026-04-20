@@ -37,6 +37,7 @@ solution is contained within the cw2_team_<your_team_number> package */
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/extract_indices.h>
 #include <pcl/features/normal_3d.h>
+#include <pcl/features/moment_of_inertia_estimation.h>
 #include <pcl/ModelCoefficients.h>
 #include <pcl/sample_consensus/method_types.h>
 #include <pcl/sample_consensus/model_types.h>
@@ -138,6 +139,7 @@ public:
   pcl::ExtractIndices<PointT> g_extract_pc;
   pcl::ExtractIndices<pcl::Normal> g_extract_normals;
   pcl::EuclideanClusterExtraction<PointT> g_extract_euclidean;
+  pcl::MomentOfInertiaEstimation<PointT> g_inertia_estimator;
 
   pcl::PointIndices::Ptr g_inliers_plane;
   pcl::ModelCoefficients::Ptr g_coeff_plane;
@@ -181,7 +183,7 @@ public:
   int    pcl_plane_max_iterations_ = 100;
   double pcl_plane_distance_       = 0.03;
   double pcl_cluster_tolerance_    = 0.02;
-  int    pcl_cluster_min_size_     = 100;
+  int    pcl_cluster_min_size_     = 5000;
   int    pcl_cluster_max_size_     = 60000;
 
 
