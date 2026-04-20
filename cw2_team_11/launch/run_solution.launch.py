@@ -54,27 +54,27 @@ def generate_launch_description():
             }.items()
         ),
 
-        # TimerAction(
-        #     period=launch_delay,
-        #     actions=[
-        #         IncludeLaunchDescription(
-        #             PythonLaunchDescriptionSource([
-        #                 FindPackageShare('cw2_world_spawner'),
-        #                 '/launch/world_spawner.launch.py'
-        #             ])
-        #         )
-        #     ]
-        # ),
+        TimerAction(
+            period=launch_delay,
+            actions=[
+                IncludeLaunchDescription(
+                    PythonLaunchDescriptionSource([
+                        FindPackageShare('cw2_world_spawner'),
+                        '/launch/world_spawner.launch.py'
+                    ])
+                )
+            ]
+        ),
 
-        # Node(
-        #     package='cw2_team_11',
-        #     executable='cw2_solution_node',
-        #     name='cw2_solution_node',
-        #     output='screen',
-        #     parameters=[{
-        #         'use_sim_time': use_sim_time,
-        #         'pointcloud_topic': pointcloud_topic,
-        #         'pointcloud_qos_reliable': pointcloud_qos_reliable,
-        #     }],
-        # ),
+        Node(
+            package='cw2_team_11',
+            executable='cw2_solution_node',
+            name='cw2_solution_node',
+            output='screen',
+            parameters=[{
+                'use_sim_time': use_sim_time,
+                'pointcloud_topic': pointcloud_topic,
+                'pointcloud_qos_reliable': pointcloud_qos_reliable,
+            }],
+        ),
     ])

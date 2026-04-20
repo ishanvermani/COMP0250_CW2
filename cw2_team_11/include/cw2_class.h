@@ -85,7 +85,10 @@ public:
   Eigen::Vector3f getCentroid(PointC &in_cloud_ptr);
   std::string colorOfPointCloud(PointC &in_cloud_ptr, float threshold);
   void filteringPipeline();
+
   Eigen::Vector3f toWorldFrame(Eigen::Vector3f local_point);
+  PointT toWorldFrame(PointT local_point);
+
   bool moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group, float theta);
 
 
@@ -181,7 +184,7 @@ public:
   int    pcl_normal_k_             = 50;
   double pcl_plane_normal_weight_  = 0.1;
   int    pcl_plane_max_iterations_ = 100;
-  double pcl_plane_distance_       = 0.03;
+  double pcl_plane_distance_       = 0.01;
   double pcl_cluster_tolerance_    = 0.02;
   int    pcl_cluster_min_size_     = 5000;
   int    pcl_cluster_max_size_     = 60000;
@@ -221,12 +224,14 @@ public:
 
   enum class SHAPE_TYPE
   {
+    UNKNOWN,
     NOUGHT,
     CROSS
   };
 
   enum class SHAPE_SIZE
   {
+    UNKNOWN,
     MM_20,
     MM_30,
     MM_40
@@ -236,9 +241,12 @@ public:
   {
     SHAPE_TYPE type;
     SHAPE_SIZE size;
+    //std_msgs::Pose;
   };
 
-  SHAPE classifyShape(PointC &in_cloud_ptr);
+  bool classifyShape(PointCPtr in_cloud_ptr, SHAPE &shape);
+  SHAPE findAndClassifyShape();
+
 
 
 };

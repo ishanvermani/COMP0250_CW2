@@ -173,15 +173,15 @@ void cw2::t1_callback(
   (void)request;
   (void)response;
 
-  std::string frame_id;
-  std::size_t point_count = 0;
-  std::uint64_t sequence = 0;
-  {
-    std::lock_guard<std::mutex> lock(cloud_mutex_);
-    frame_id = g_input_pc_frame_id_;
-    point_count = g_cloud_ptr ? g_cloud_ptr->size() : 0;
-    sequence = g_cloud_sequence_;
-  }
+  // std::string frame_id;
+  // std::size_t point_count = 0;
+  // std::uint64_t sequence = 0;
+  // {
+  //   std::lock_guard<std::mutex> lock(cloud_mutex_);
+  //   frame_id = g_input_pc_frame_id_;
+  //   point_count = g_cloud_ptr ? g_cloud_ptr->size() : 0;
+  //   sequence = g_cloud_sequence_;
+  // }
 
   RCLCPP_INFO(node_->get_logger(), "moving camera above (%.3f %.3f %.3f)", request->object_point.point.x, request->object_point.point.y, request->object_point.point.z);
 
@@ -235,17 +235,22 @@ void cw2::t1_callback(
 
   // filteringPipeline();
 
-  processCloud();
+  // processCloud();
 
-  RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
+  // RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
 
-  std::vector<PointCPtr> shapes = extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
+  // std::vector<PointCPtr> shapes = extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
 
-  for (size_t i = 0; i < shapes.size(); i++)
-  {
-    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
-    classifyShape(*shapes[i]);
-  }
+  cw2::SHAPE ref_shape = findAndClassifyShape();
+  // for (size_t i = 0; i < shapes.size(); i++)
+  // {
+  //   RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+    
+  //   if(classifyShape(shapes[i], ref_shape))
+  //   {
+  //     break;
+  //   }
+  // }
   
 
   // RCLCPP_WARN(
@@ -263,15 +268,15 @@ void cw2::t2_callback(
   (void)request;
   response->mystery_object_num = -1;
 
-  std::string frame_id;
-  std::size_t point_count = 0;
-  std::uint64_t sequence = 0;
-  {
-    std::lock_guard<std::mutex> lock(cloud_mutex_);
-    frame_id = g_input_pc_frame_id_;
-    point_count = g_cloud_ptr ? g_cloud_ptr->size() : 0;
-    sequence = g_cloud_sequence_;
-  }
+  // std::string frame_id;
+  // std::size_t point_count = 0;
+  // std::uint64_t sequence = 0;
+  // {
+  //   std::lock_guard<std::mutex> lock(cloud_mutex_);
+  //   frame_id = g_input_pc_frame_id_;
+  //   point_count = g_cloud_ptr ? g_cloud_ptr->size() : 0;
+  //   sequence = g_cloud_sequence_;
+  // }
 
   
   static const std::string planning_group = "panda_arm";
@@ -315,17 +320,7 @@ void cw2::t2_callback(
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
 
-  processCloud();
-
-  RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
-
-  std::vector<PointCPtr> shapes = extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
-
-  for (size_t i = 0; i < shapes.size(); i++)
-  {
-    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
-    classifyShape(*shapes[i]);
-  }
+  cw2::SHAPE reference_shape_1 = findAndClassifyShape();
 
   
   //Reference object 2
@@ -340,17 +335,8 @@ void cw2::t2_callback(
   move_group2.execute(plan2);
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-  processCloud();
+  cw2::SHAPE reference_shape_2 = findAndClassifyShape();
 
-  RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
-
-  shapes = extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
-
-  for (size_t i = 0; i < shapes.size(); i++)
-  {
-    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
-    classifyShape(*shapes[i]);
-  }
 
   //Mystery object
   target_pose.position.x = request->mystery_object_point.point.x;
@@ -362,18 +348,44 @@ void cw2::t2_callback(
 
   success = (move_group2.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS);
   move_group2.execute(plan3);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-  processCloud();
 
-  RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
+  cw2::SHAPE mystery_shape = findAndClassifyShape();
 
-  shapes = extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
 
-  for (size_t i = 0; i < shapes.size(); i++)
+  if (reference_shape_1.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_1.type == mystery_shape.type)
   {
-    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
-    classifyShape(*shapes[i]);
+    response->mystery_object_num = 1;
+    RCLCPP_INFO(node_->get_logger(), "Mystery shape matches Reference 1!");
   }
+  else if (reference_shape_2.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_2.type == mystery_shape.type)
+  {
+    response->mystery_object_num = 2;
+    RCLCPP_INFO(node_->get_logger(), "Mystery shape matches Reference 2!");
+
+  }
+  else
+  {
+    /// something didn't work :(
+    if (reference_shape_1.type == cw2::SHAPE_TYPE::UNKNOWN)
+    {
+      RCLCPP_INFO(node_->get_logger(), "Reference 1 is Unknown");
+    }
+
+    if (reference_shape_2.type == cw2::SHAPE_TYPE::UNKNOWN)
+    {
+      RCLCPP_INFO(node_->get_logger(), "Reference 2 is Unknown");
+    }
+
+    if (mystery_shape.type == cw2::SHAPE_TYPE::UNKNOWN)
+    {
+      RCLCPP_INFO(node_->get_logger(), "Mystery shape is Unknown");
+    }
+  }
+  
+
+
 }
 
 void cw2::t3_callback(
@@ -602,132 +614,142 @@ Eigen::Vector3f cw2::getCentroid(PointC &in_cloud_ptr)
   return centroid.head<3>();  // drops the homogeneous w component
 }
 
-cw2::SHAPE cw2::classifyShape(PointC &in_cloud_ptr)
+bool cw2::classifyShape(PointCPtr in_cloud_ptr, cw2::SHAPE &shape)
 {
 
-  /*
-    ok heres the plan
-
-    what do I want??
-  
-    - PCA axes - to get a PoseStamped
-    - OBB? Not really
-    - Classify shape
-    - To classify shape, I want to get variance along the principle axes
-
-    - this can be eigenvalue, or covariance on transformed pointcloud
-    - lets assume the simple case - eigenvalue
-
-
-    1) transform
-    2) get eigenvalue
-
-
-    lets print eigenvalues and covar matrices. 
-    Lets print covar matrix too
-
-    change rotation
-
-    need obb w h d to get the size, so obb is needed
-    print obb rotation too
-  
-  
-  
-  */
-
-
-  // 1 lets do OBB
-
-  // do I need to do this in the world frame
-  // can test by varying height
-
-  Eigen::Vector3f centroid;
-  Eigen::Vector3f obb_centre;
-  Eigen::Vector3f obb_dimensions;
-  Eigen::Vector3f obb_rotational_matrix;
-
-  // pcl::computeCentroidAndOBB(in_cloud_ptr, centroid, obb_centre, obb_dimensions, obb_rotational_matrix);
-
-  // RCLCPP_INFO(node_->get_logger(), "Reported Centroid: x %.3f y %.3f z%.3f", centroid.x(), centroid.y(), centroid.z());
-
-  // RCLCPP_INFO(node_->get_logger(), "Reported obb: x %.3f y %.3f z%.3f", obb_centre.x(), obb_centre.y(), obb_centre.z());
-
-  // RCLCPP_INFO(node_->get_logger(), "Reported Dimensions: x %.3f y %.3f z%.3f", obb_dimensions.x(), obb_dimensions.y(), obb_dimensions.z());
-
-  // RCLCPP_INFO(node_->get_logger(), "Reported Rot: x %.3f y %.3f z%.3f", obb_rotational_matrix.x(), obb_rotational_matrix.y(), obb_rotational_matrix.z());
-
-  // RCLCPP_INFO(node_->get_logger(), "Reported Centroid: x %.3f y %.3f z%.3f", centroid.x(), centroid.y(), centroid.z());
-
-
-  Eigen::Vector4f centroid_4;
-
-  centroid = getCentroid(in_cloud_ptr);
-
-  centroid_4.x() = centroid.x();
-  centroid_4.y() = centroid.y();
-  centroid_4.z() = centroid.z();
-
-  Eigen::Matrix3f covariance;
-
-  pcl::computeCovarianceMatrixNormalized(in_cloud_ptr, centroid_4, covariance);
-
-  RCLCPP_INFO(node_->get_logger(), "Covar Matrix: %.3f %.3f %.3f \n %.3f %.3f %.3f \n %.3f %.3f %.3f", covariance(0, 0), covariance(0, 1), covariance(0, 2), covariance(1, 0), covariance(1, 1), covariance(1, 2), covariance(2, 0), covariance(2, 1), covariance(2, 2));
-
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> eigen_solver(covariance, Eigen::ComputeEigenvectors);
-  Eigen::Matrix3f eigenVectorsPCA = eigen_solver.eigenvectors();
-  Eigen::Vector3f eigenvalues = eigen_solver.eigenvalues();
-  eigenVectorsPCA.col(2) = eigenVectorsPCA.col(0).cross(eigenVectorsPCA.col(1));  /// This line is necessary for proper orientation in some cases. The numbers come out the same without it, but
-                                                                                ///    the signs are different and the box doesn't get correctly oriented in some cases.
-
-
-  RCLCPP_INFO(node_->get_logger(), "Eigenvalues: 1 %.3f 2 %.3f 3 %.3f", eigenvalues(0), eigenvalues(1), eigenvalues(2));
-
-
-  g_inertia_estimator.setInputCloud(in_cloud_ptr.makeShared());
+  g_inertia_estimator.setInputCloud(in_cloud_ptr);
+  g_inertia_estimator.setAngleStep(10.0);
   g_inertia_estimator.compute();
 
-
-  std::vector<float> eccentricity;
   PointT min_OBB, max_OBB, position_OBB;
   Eigen::Matrix3f rotation_OBB;
   float major_eigen, middle_eigen, minor_eigen;
   float yaw;
 
-  g_inertia_estimator.getEccentricity(eccentricity);
+
+  std::vector<float> moments;
+  g_inertia_estimator.getMomentOfInertia(moments);
+
   g_inertia_estimator.getOBB(min_OBB, max_OBB, position_OBB, rotation_OBB);
   g_inertia_estimator.getEigenValues(major_eigen, middle_eigen, minor_eigen);
 
-  yaw = atan2(rotation_OBB(1, 0), rotation_OBB(0, 0));
+  // Print eigenvalues (major, middle, minor)
+  RCLCPP_INFO(node_->get_logger(), "Eigenvalues: major=%.5f middle=%.5f minor=%.5f", major_eigen, middle_eigen, minor_eigen);
 
-  // Print eccentricity
-  if (eccentricity.size() == 3) {
-    RCLCPP_INFO(node_->get_logger(), "Eccentricity: %.3f %.3f %.3f", eccentricity[0], eccentricity[1], eccentricity[2]);
-  } else {
-    RCLCPP_INFO(node_->get_logger(), "Eccentricity: size=%zu", eccentricity.size());
-  }
-
-  // Print OBB min, max, position
-  RCLCPP_INFO(node_->get_logger(), "OBB min: (%.3f, %.3f, %.3f)", min_OBB.x, min_OBB.y, min_OBB.z);
-  RCLCPP_INFO(node_->get_logger(), "OBB max: (%.3f, %.3f, %.3f)", max_OBB.x, max_OBB.y, max_OBB.z);
-  RCLCPP_INFO(node_->get_logger(), "OBB position: (%.3f, %.3f, %.3f)", position_OBB.x, position_OBB.y, position_OBB.z);
-
-  // Print OBB rotation matrix
+// Print OBB rotation matrix
   RCLCPP_INFO(node_->get_logger(), "OBB rotation matrix: [%.3f %.3f %.3f; %.3f %.3f %.3f; %.3f %.3f %.3f]", 
     rotation_OBB(0,0), rotation_OBB(0,1), rotation_OBB(0,2),
     rotation_OBB(1,0), rotation_OBB(1,1), rotation_OBB(1,2),
     rotation_OBB(2,0), rotation_OBB(2,1), rotation_OBB(2,2));
 
-  // Print eigenvalues (major, middle, minor)
-  RCLCPP_INFO(node_->get_logger(), "Eigenvalues: major=%.3f middle=%.3f minor=%.3f", major_eigen, middle_eigen, minor_eigen);
+  max_OBB = toWorldFrame(max_OBB);
+  min_OBB = toWorldFrame(min_OBB);
+
+
+  RCLCPP_INFO(node_->get_logger(), "Delta: x=%.1f y=%.1f z=%.1f", 1000*abs(max_OBB.x - min_OBB.x), 1000*abs(max_OBB.y - min_OBB.y), 1000*abs(max_OBB.z - min_OBB.z));
+
+  //sanity checks
+  //if either the major or middle eigen is zero, skip this cluster
+  if (major_eigen < 0.0001 || middle_eigen < 0.0001)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Zero Major/Middle eigen, exiting");
+    return false;
+  }
+
+  //if major != middle eigen. Have a tolerance of 10%. 
+  //removes clusters that are not squares
+  if (abs((major_eigen/middle_eigen) - 1) > 0.1)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Nonsquare eigen, exiting");
+    return false;
+  }
+
+  //SHAPE CLASSIFICATION
+  //done using minimum moment of inertia
+
+  if (moments[0] < 7e-8)
+  {
+    shape.type = cw2::SHAPE_TYPE::CROSS;
+    RCLCPP_INFO(node_->get_logger(), "Moment %.4e, assigned as Cross", moments[0]);
+
+  }
+  else
+  {
+    shape.type = cw2::SHAPE_TYPE::NOUGHT;
+    RCLCPP_INFO(node_->get_logger(), "Moment %.4e, assigned as Nought", moments[0]);
+  }
+
+
+  //SIZE CLASSIFICATION
+
+  float delta = 1000*abs(max_OBB.x - min_OBB.x); //convert from m to mm
+
+  //square diagonal check
+  if (shape.type == cw2::SHAPE_TYPE::NOUGHT)
+  {
+    
+    Eigen::Matrix3f rotated;
+
+    rotated = rotation_OBB * Eigen::AngleAxisf(M_PI / 4.0, Eigen::Vector3f::UnitZ()).toRotationMatrix();
+    Eigen::Vector3f min = {std::numeric_limits<float>::max(), 0, 0};
+    Eigen::Vector3f max = {-1*std::numeric_limits<float>::max(), 0, 0};
+
+    for (unsigned int i = 0; i < in_cloud_ptr->size(); i++)
+    {
+
+      Eigen::Vector3f local_point(
+        (*in_cloud_ptr)[i].x - position_OBB.x,
+        (*in_cloud_ptr)[i].y - position_OBB.y,
+        (*in_cloud_ptr)[i].z - position_OBB.z
+      );
+      Eigen::Vector3f rotated_point = rotated * local_point;
+      float new_x = rotated_point.x();
+
+
+      if (new_x < min.x()) min = rotated_point;
+      if (new_x > max.x()) max = rotated_point;     
+    }
+
+    float adjusted_delta = 1000*abs(max.x() - min.x());
+
+    RCLCPP_INFO(node_->get_logger(), "Delta after rotation is %.3f", adjusted_delta);
+
+    //store the smaller of the two diameters - either the edge/edge or diagonal
+    delta = std::min(delta, adjusted_delta);
+
+  }
+  
+  //Hardcoded constraints for each of the three classes
+  if (delta > 75 && delta < 125)
+  {
+    shape.size = cw2::SHAPE_SIZE::MM_20;
+    
+    RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 20mm", delta);
+  }
+  else if (delta >= 125 && delta < 175)
+  {
+    shape.size = cw2::SHAPE_SIZE::MM_30;
+    RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 30mm", delta);
+  }
+  else if (delta >= 175 && delta < 300)
+  {
+    shape.size = cw2::SHAPE_SIZE::MM_40;
+    RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 40mm", delta);
+  }
+  else
+  {
+    RCLCPP_INFO(node_->get_logger(), "Delta x %.3f too big, exiting", delta);
+    return false;
+  }
+
+  yaw = atan2(rotation_OBB(1, 0), rotation_OBB(0, 0));
+
+  
 
   // Print yaw
   RCLCPP_INFO(node_->get_logger(), "Yaw: %.3f", yaw);
 
-  cw2::SHAPE shape;
-  shape.type = cw2::SHAPE_TYPE::CROSS;
-  shape.size = cw2::SHAPE_SIZE::MM_40;
-
-  return shape;
+  return true;
 
 }
 
@@ -761,14 +783,6 @@ void cw2::processCloud()
 
   rosTopicToCloud(latest_cloud_msg_);
 
-  PointT min, max;
-  pcl::getMinMax3D(*g_cloud_filtered, min, max);
-
-  RCLCPP_INFO(node_->get_logger(), "Min: (%.3f, %.3f, %.3f)", min.x, min.y, min.z);
-  RCLCPP_INFO(node_->get_logger(), "Max: (%.3f, %.3f, %.3f)", max.x, max.y, max.z);
-
-
-
   pubFilteredPCMsg(g_pub_cloud, *g_cloud_filtered, header);
   // applyVoxelGrid(pcl_voxel_leaf_size_);
 
@@ -779,7 +793,7 @@ void cw2::processCloud()
   findNormals(pcl_normal_k_);
   segmentationPipeline(pcl_plane_normal_weight_, pcl_plane_max_iterations_, pcl_plane_distance_);
   pubFilteredPCMsg(g_pub_plane, *g_cloud_segmented_plane, header);
-  extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
+  //extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
 
 }
 
@@ -842,10 +856,33 @@ void cw2::filteringPipeline()
 {
   rosTopicToCloud(latest_cloud_msg_);
   // applyVoxelGrid(0.05);
-  applyPassthrough(-0.25, 0.20, "y");
+  //applyPassthrough(-0.25, 0.20, "y");
   applyOutlierRemoval(20, 1.0);
   findNormals(50);
   segmentationPipeline(0.1, 100, pcl_plane_distance_);
+}
+
+cw2::SHAPE cw2::findAndClassifyShape()
+{
+
+  filteringPipeline();
+
+  RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
+
+  std::vector<PointCPtr> shapes = extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
+
+  cw2::SHAPE ref_shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN};
+  for (size_t i = 0; i < shapes.size(); i++)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+    
+    if(classifyShape(shapes[i], ref_shape))
+    {
+      break;
+    }
+  }
+
+  return ref_shape;
 }
 
 //convert local coords to world coords
@@ -866,4 +903,24 @@ Eigen::Vector3f cw2::toWorldFrame(Eigen::Vector3f local_point)
   }
 
   return Eigen::Vector3f(world.point.x, world.point.y, world.point.z);
+}
+
+//convert local coords to world coords
+PointT cw2::toWorldFrame(PointT local_point)
+{
+  geometry_msgs::msg::PointStamped local, world;
+  local.header.frame_id = g_input_pc_frame_id;
+  local.header.stamp = latest_cloud_msg_->header.stamp;
+  local.point.x = local_point.x;
+  local.point.y = local_point.y;
+  local.point.z = local_point.z;
+
+  try {
+    tf_buffer_.transform(local, world, "panda_link0");
+  } catch (tf2::TransformException &ex) {
+    RCLCPP_WARN(node_->get_logger(), "Transform failed: %s", ex.what());
+    return local_point;
+  }
+
+  return PointT(world.point.x, world.point.y, world.point.z);
 }
