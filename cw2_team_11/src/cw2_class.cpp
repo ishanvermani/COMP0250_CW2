@@ -188,12 +188,16 @@ void cw2::t1_callback(
   move_group2.setPlanningTime(5.0);
   move_group2.setMaxVelocityScalingFactor(0.2);
   move_group2.setMaxAccelerationScalingFactor(0.2);
-  
+
   
   geometry_msgs::msg::Pose target_pose;
-  target_pose.position.x = request->object_point.point.x;
-  target_pose.position.y = request->object_point.point.y;
-  target_pose.position.z = request->object_point.point.z + 0.5;
+
+  double camera_x_offset = 0.03;
+  double camera_y_offset = 0;
+
+  target_pose.position.x = request->object_point.point.x; //- camera_x_offset;
+  target_pose.position.y = request->object_point.point.y; //+ camera_y_offset;
+  target_pose.position.z = request->object_point.point.z + 0.6;
 
   double roll = M_PI; // 180 degrees
   double pitch = 0;
@@ -219,13 +223,90 @@ void cw2::t1_callback(
 
   bool success = (move_group2.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
   move_group2.execute(plan);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  //RCLCPP_WARN(
-    //node_->get_logger(),
-    //"Task 1 is not implemented in cw2_team_11. Latest cloud: seq=%llu frame='%s' points=%zu",
-    //static_cast<unsigned long long>(sequence),
-    //frame_id.c_str(),
-    //point_count);
+  
+  // Lets do the grippy
+  
+  RCLCPP_INFO(L, "Starting gripping sequence for shape: %s", request->shape_type.c_str());
+
+  moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
+  hand_group.setMaxVelocityScalingFactor(1.0);
+  hand_group.setMaxAccelerationScalingFactor(1.0);
+
+  // Declare the coordinate variables
+  double grip_x, grip_y;
+  double basket_x, basket_y;
+  
+  double grip_z = request->object_point.point.z + 0.15;
+  double basket_z = request->goal_point.point.z + 0.27;
+
+  // iffy iffy
+  if (request->shape_type == "nought") {
+    RCLCPP_INFO(L, "Applying nought offsets");
+    grip_x = request->object_point.point.x;
+    grip_y = request->object_point.point.y - 0.08;
+    
+    basket_x = request->goal_point.point.x;
+    basket_y = request->goal_point.point.y - 0.05;
+  } 
+  else {
+    RCLCPP_INFO(L, "Applying cross offsets");
+    grip_x = request->object_point.point.x - 0.05;
+    grip_y = request->object_point.point.y;
+    
+    basket_x = request->goal_point.point.x - 0.02;
+    basket_y = request->goal_point.point.y;
+  }
+
+  // Move to the grasp position
+  target_pose.position.x = grip_x;
+  target_pose.position.y = grip_y;
+  target_pose.position.z = grip_z;
+
+  move_group2.setPoseTarget(target_pose);
+  moveit::planning_interface::MoveGroupInterface::Plan grasp_plan;
+  success = (move_group2.plan(grasp_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  move_group2.execute(grasp_plan);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  // Close the gripper
+  RCLCPP_INFO(L, "Closing gripper. TOUT TOUT TOUT. I WANT THE BIG BUNNY");
+  hand_group.setJointValueTarget("panda_finger_joint1", 0.020); 
+  moveit::planning_interface::MoveGroupInterface::Plan close_plan;
+  success = (hand_group.plan(close_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  hand_group.execute(close_plan);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+ 
+  // LIFTING THE OBJECT UP
+  RCLCPP_INFO(L, "Lifting the object up. TOUT TOUT TOUT. I WANT THE BIG BUNNY");
+  target_pose.position.z = grip_z + 0.3;
+  move_group2.setPoseTarget(target_pose);
+  moveit::planning_interface::MoveGroupInterface::Plan lift_plan;
+  success = (move_group2.plan(lift_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  move_group2.execute(lift_plan);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  // Move to the basket
+  RCLCPP_INFO(L, "Lets score some 3s");
+  target_pose.position.x = basket_x;
+  target_pose.position.y = basket_y;
+  target_pose.position.z = basket_z;
+
+  move_group2.setPoseTarget(target_pose);
+  moveit::planning_interface::MoveGroupInterface::Plan move_to_basket_plan;
+  success = (move_group2.plan(move_to_basket_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  move_group2.execute(move_to_basket_plan);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  // Open the gripper to release the object
+  RCLCPP_INFO(L, "KOBE!");
+  hand_group.setNamedTarget("open");
+  moveit::planning_interface::MoveGroupInterface::Plan final_open_plan;
+  success = (hand_group.plan(final_open_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  hand_group.execute(final_open_plan);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 }
 
 void cw2::t2_callback(
