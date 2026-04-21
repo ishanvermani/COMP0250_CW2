@@ -19,6 +19,10 @@ solution is contained within the cw2_team_<your_team_number> package */
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/quaternion.hpp>
+
+
 
 #include <pcl_conversions/pcl_conversions.h>
 #include <tf2/exceptions.h>
@@ -27,6 +31,9 @@ solution is contained within the cw2_team_<your_team_number> package */
 #include <tf2_ros/transform_listener.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_sensor_msgs/tf2_sensor_msgs.hpp>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Matrix3x3.h>
+
 
 #include <pcl/common/centroid.h>
 #include <pcl/common/common.h>
@@ -88,6 +95,8 @@ public:
 
   Eigen::Vector3f toWorldFrame(Eigen::Vector3f local_point);
   PointT toWorldFrame(PointT local_point);
+  geometry_msgs::msg::Pose toWorldFrame(geometry_msgs::msg::Pose local_pose);
+
 
   bool moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group, float theta);
 
@@ -114,6 +123,10 @@ public:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster5;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster6;
   std::array<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr, 6> g_pub_clusters;
+
+  rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr g_pub_poly;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr g_pub_pose;
+
 
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 

@@ -114,6 +114,9 @@ cw2::cw2(const rclcpp::Node::SharedPtr &node)
   g_pub_cluster5 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster5", 1);
   g_pub_cluster6 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster6", 1);
 
+  g_pub_poly = node_->create_publisher<geometry_msgs::msg::PolygonStamped>("/cw2_obb", 1);
+  g_pub_pose = node_->create_publisher<geometry_msgs::msg::PoseStamped>("/cw2_pose", 1);
+
   g_pub_clusters = {g_pub_cluster1, g_pub_cluster2, g_pub_cluster3, g_pub_cluster4, g_pub_cluster5, g_pub_cluster6};
 
   
@@ -618,17 +621,16 @@ bool cw2::classifyShape(PointCPtr in_cloud_ptr, cw2::SHAPE &shape)
 {
 
   g_inertia_estimator.setInputCloud(in_cloud_ptr);
-  g_inertia_estimator.setAngleStep(10.0);
+  //g_inertia_estimator.setAngleStep(10.0);
   g_inertia_estimator.compute();
 
   PointT min_OBB, max_OBB, position_OBB;
   Eigen::Matrix3f rotation_OBB;
   float major_eigen, middle_eigen, minor_eigen;
-  float yaw;
 
 
-  std::vector<float> moments;
-  g_inertia_estimator.getMomentOfInertia(moments);
+  // std::vector<float> moments;
+  // g_inertia_estimator.getMomentOfInertia(moments);
 
   g_inertia_estimator.getOBB(min_OBB, max_OBB, position_OBB, rotation_OBB);
   g_inertia_estimator.getEigenValues(major_eigen, middle_eigen, minor_eigen);
@@ -641,6 +643,9 @@ bool cw2::classifyShape(PointCPtr in_cloud_ptr, cw2::SHAPE &shape)
     rotation_OBB(0,0), rotation_OBB(0,1), rotation_OBB(0,2),
     rotation_OBB(1,0), rotation_OBB(1,1), rotation_OBB(1,2),
     rotation_OBB(2,0), rotation_OBB(2,1), rotation_OBB(2,2));
+
+  
+  RCLCPP_INFO(node_->get_logger(), "Delta Pre world: x=%.1f y=%.1f z=%.1f", 1000*abs(max_OBB.x - min_OBB.x), 1000*abs(max_OBB.y - min_OBB.y), 1000*abs(max_OBB.z - min_OBB.z));
 
   max_OBB = toWorldFrame(max_OBB);
   min_OBB = toWorldFrame(min_OBB);
@@ -664,90 +669,285 @@ bool cw2::classifyShape(PointCPtr in_cloud_ptr, cw2::SHAPE &shape)
     return false;
   }
 
+  int num_points_close = 0;
+  const float close_point_threshold = 0.020f;
+
+  Eigen::Vector3f centroid_vec(position_OBB.x, position_OBB.y, position_OBB.z);
+  double sum_dist = 0.0;
+  for (const auto& pt : in_cloud_ptr->points) {
+    Eigen::Vector3f pt_vec(pt.x, pt.y, pt.z);
+    double dist = (pt_vec - centroid_vec).norm();
+    sum_dist += dist;
+    if (dist < close_point_threshold)
+    {
+      num_points_close++;
+    }
+
+  }
+  double avg_dist = (in_cloud_ptr->size() > 0) ? (sum_dist / in_cloud_ptr->size()) : 0.0;
+
+
   //SHAPE CLASSIFICATION
   //done using minimum moment of inertia
 
-  if (moments[0] < 7e-8)
+  // if (moments[0] < 7e-8)
+  // {
+  //   shape.type = cw2::SHAPE_TYPE::CROSS;
+  //   RCLCPP_INFO(node_->get_logger(), "Moment %.4e, assigned as Cross", moments[0]);
+
+  // }
+  // else
+  // {
+  //   shape.type = cw2::SHAPE_TYPE::NOUGHT;
+  //   RCLCPP_INFO(node_->get_logger(), "Moment %.4e, assigned as Nought", moments[0]);
+  // }
+
+  if (num_points_close > 500)
   {
     shape.type = cw2::SHAPE_TYPE::CROSS;
-    RCLCPP_INFO(node_->get_logger(), "Moment %.4e, assigned as Cross", moments[0]);
+    RCLCPP_INFO(node_->get_logger(), "%d central points, assigned as Cross", num_points_close);
 
   }
   else
   {
     shape.type = cw2::SHAPE_TYPE::NOUGHT;
-    RCLCPP_INFO(node_->get_logger(), "Moment %.4e, assigned as Nought", moments[0]);
+    RCLCPP_INFO(node_->get_logger(), "%d central points, assigned as Nought", num_points_close);
   }
+
+
 
 
   //SIZE CLASSIFICATION
 
-  float delta = 1000*abs(max_OBB.x - min_OBB.x); //convert from m to mm
+  // float delta = 1000*abs(max_OBB.x - min_OBB.x); //convert from m to mm
 
   //square diagonal check
+  // if (shape.type == cw2::SHAPE_TYPE::NOUGHT)
+  // {
+    
+  //   Eigen::Matrix3f rotated;
+
+  //   rotated = rotation_OBB * Eigen::AngleAxisf(M_PI / 4.0, Eigen::Vector3f::UnitZ()).toRotationMatrix();
+  //   Eigen::Vector3f min = {std::numeric_limits<float>::max(), 0, 0};
+  //   Eigen::Vector3f max = {-1*std::numeric_limits<float>::max(), 0, 0};
+
+  //   for (unsigned int i = 0; i < in_cloud_ptr->size(); i++)
+  //   {
+
+  //     Eigen::Vector3f local_point(
+  //       (*in_cloud_ptr)[i].x - position_OBB.x,
+  //       (*in_cloud_ptr)[i].y - position_OBB.y,
+  //       (*in_cloud_ptr)[i].z - position_OBB.z
+  //     );
+  //     Eigen::Vector3f rotated_point = rotated * local_point;
+  //     float new_x = rotated_point.x();
+
+
+  //     if (new_x < min.x()) min = rotated_point;
+  //     if (new_x > max.x()) max = rotated_point;     
+  //   }
+
+  //   float adjusted_delta = 1000*abs(max.x() - min.x());
+
+  //   RCLCPP_INFO(node_->get_logger(), "Delta after rotation is %.3f", adjusted_delta);
+
+  //   //store the smaller of the two diameters - either the edge/edge or diagonal
+  //   delta = std::min(delta, adjusted_delta);
+
+  // }
+
+  float delta = 1000*(abs(max_OBB.x - min_OBB.x) + abs(max_OBB.y - min_OBB.y))/2; //convert from m to mm
+  
+
   if (shape.type == cw2::SHAPE_TYPE::NOUGHT)
   {
-    
-    Eigen::Matrix3f rotated;
-
-    rotated = rotation_OBB * Eigen::AngleAxisf(M_PI / 4.0, Eigen::Vector3f::UnitZ()).toRotationMatrix();
-    Eigen::Vector3f min = {std::numeric_limits<float>::max(), 0, 0};
-    Eigen::Vector3f max = {-1*std::numeric_limits<float>::max(), 0, 0};
-
-    for (unsigned int i = 0; i < in_cloud_ptr->size(); i++)
+    if (avg_dist >= 0.035 && avg_dist < 0.055)
     {
-
-      Eigen::Vector3f local_point(
-        (*in_cloud_ptr)[i].x - position_OBB.x,
-        (*in_cloud_ptr)[i].y - position_OBB.y,
-        (*in_cloud_ptr)[i].z - position_OBB.z
-      );
-      Eigen::Vector3f rotated_point = rotated * local_point;
-      float new_x = rotated_point.x();
-
-
-      if (new_x < min.x()) min = rotated_point;
-      if (new_x > max.x()) max = rotated_point;     
+      shape.size = cw2::SHAPE_SIZE::MM_20;
+      RCLCPP_INFO(node_->get_logger(), "Average Distance %.5f, assigned as 20mm", avg_dist);
+    }
+    else if (avg_dist >= 0.055 && avg_dist < 0.075)
+    {
+      shape.size = cw2::SHAPE_SIZE::MM_30;
+      RCLCPP_INFO(node_->get_logger(), "Average Distance %.5f, assigned as 30mm", avg_dist);
+    }
+    else if (avg_dist >= 0.075 && avg_dist < 0.095)
+    {
+      shape.size = cw2::SHAPE_SIZE::MM_40;
+      RCLCPP_INFO(node_->get_logger(), "Average Distance %.5f, assigned as 40mm", avg_dist);
+    }
+    else
+    {
+      RCLCPP_INFO(node_->get_logger(), "Average distance %.5f too big, exiting", avg_dist);
+      return false;
     }
 
-    float adjusted_delta = 1000*abs(max.x() - min.x());
-
-    RCLCPP_INFO(node_->get_logger(), "Delta after rotation is %.3f", adjusted_delta);
-
-    //store the smaller of the two diameters - either the edge/edge or diagonal
-    delta = std::min(delta, adjusted_delta);
-
-  }
-  
-  //Hardcoded constraints for each of the three classes
-  if (delta > 75 && delta < 125)
-  {
-    shape.size = cw2::SHAPE_SIZE::MM_20;
-    
-    RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 20mm", delta);
-  }
-  else if (delta >= 125 && delta < 175)
-  {
-    shape.size = cw2::SHAPE_SIZE::MM_30;
-    RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 30mm", delta);
-  }
-  else if (delta >= 175 && delta < 300)
-  {
-    shape.size = cw2::SHAPE_SIZE::MM_40;
-    RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 40mm", delta);
   }
   else
   {
-    RCLCPP_INFO(node_->get_logger(), "Delta x %.3f too big, exiting", delta);
-    return false;
+    
+    if (delta > 75 && delta < 125)
+    {
+      shape.size = cw2::SHAPE_SIZE::MM_20;
+      
+      RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 20mm", delta);
+    }
+    else if (delta >= 125 && delta < 175)
+    {
+      shape.size = cw2::SHAPE_SIZE::MM_30;
+      RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 30mm", delta);
+    }
+    else if (delta >= 175 && delta < 300)
+    {
+      shape.size = cw2::SHAPE_SIZE::MM_40;
+      RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 40mm", delta);
+    }
+    else
+    {
+      RCLCPP_INFO(node_->get_logger(), "Delta x %.3f too big, exiting", delta);
+      return false;
+    }
+  }
+  
+  
+  //Hardcoded constraints for each of the three classes
+  // if (delta > 75 && delta < 125)
+  // {
+  //   shape.size = cw2::SHAPE_SIZE::MM_20;
+    
+  //   RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 20mm", delta);
+  // }
+  // else if (delta >= 125 && delta < 175)
+  // {
+  //   shape.size = cw2::SHAPE_SIZE::MM_30;
+  //   RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 30mm", delta);
+  // }
+  // else if (delta >= 175 && delta < 300)
+  // {
+  //   shape.size = cw2::SHAPE_SIZE::MM_40;
+  //   RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 40mm", delta);
+  // }
+  // else
+  // {
+  //   RCLCPP_INFO(node_->get_logger(), "Delta x %.3f too big, exiting", delta);
+  //   return false;
+  // }
+
+
+  //ANGLE CLASSIFICATION
+
+  bool is_nought_diagonal = false;
+  if (shape.type == cw2::SHAPE_TYPE::NOUGHT)
+  { 
+    switch(shape.size)
+    {
+      case cw2::SHAPE_SIZE::MM_20:
+      {
+        is_nought_diagonal = delta > (100*(sqrt(2)) - 10);
+
+        break;
+      }
+      case cw2::SHAPE_SIZE::MM_30:
+      {
+        is_nought_diagonal = delta > (150*(sqrt(2)) - 10);
+
+        break;
+      }
+      case cw2::SHAPE_SIZE::MM_40:
+      {
+        is_nought_diagonal = delta > (200*(sqrt(2)) - 10);
+
+        break;
+      }
+      default:
+        break;
+    }
   }
 
-  yaw = atan2(rotation_OBB(1, 0), rotation_OBB(0, 0));
-
+  if (is_nought_diagonal)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Delta is %.3f, is diagonal", delta);
+  }
+  else
+  {
+    RCLCPP_INFO(node_->get_logger(), "Delta is %.3f, is NOT diagonal", delta);
+  }
   
 
+
+  double yaw = atan2(rotation_OBB(1, 0), rotation_OBB(0, 0));
+
+
+
   // Print yaw
-  RCLCPP_INFO(node_->get_logger(), "Yaw: %.3f", yaw);
+  RCLCPP_INFO(node_->get_logger(), "Yaw: %.3f", 180*yaw/M_PI);
+
+  double adjusted_yaw = (int)(90 - (180*yaw/M_PI) + 45.0f*is_nought_diagonal)%90;
+
+  if (adjusted_yaw < 0)
+  {
+    adjusted_yaw = adjusted_yaw + 90;
+  }
+
+  RCLCPP_INFO(node_->get_logger(), "adjusted yaw: %.3f", adjusted_yaw);
+
+  tf2::Quaternion q;
+  q.setRPY(0, 0, yaw);
+
+  geometry_msgs::msg::Point p;
+  p.x = position_OBB.x;
+  p.y = position_OBB.y;
+  p.z = position_OBB.z;
+
+  geometry_msgs::msg::PoseStamped pose;
+  pose.pose.orientation = tf2::toMsg(q);
+  pose.pose.position = p;
+
+  pose.header.frame_id = g_input_pc_frame_id;
+  pose.header.stamp = latest_cloud_msg_->header.stamp;
+
+  if (g_pub_pose)
+  {
+    g_pub_pose->publish(pose);
+  }
+
+  geometry_msgs::msg::PolygonStamped poly;
+  poly.header.frame_id = g_input_pc_frame_id;
+  poly.header.stamp = latest_cloud_msg_->header.stamp;
+
+  // Create square corners from min_OBB and max_OBB
+  std::vector<Eigen::Vector3f> corners(4);
+  // min_OBB and max_OBB are in the OBB-aligned frame, so corners are:
+  // (min.x, min.y), (max.x, min.y), (max.x, max.y), (min.x, max.y) at z = min_OBB.z (or max_OBB.z if box is not flat)
+  float z_val = (fabs(max_OBB.z - min_OBB.z) < 1e-4) ? min_OBB.z : (min_OBB.z + max_OBB.z) / 2.0f;
+  corners[0] = Eigen::Vector3f(min_OBB.x, min_OBB.y, z_val);
+  corners[1] = Eigen::Vector3f(max_OBB.x, min_OBB.y, z_val);
+  corners[2] = Eigen::Vector3f(max_OBB.x, max_OBB.y, z_val);
+  corners[3] = Eigen::Vector3f(min_OBB.x, max_OBB.y, z_val);
+
+  // Transform corners to world frame if needed (optional, here we keep in input frame)
+  for (int i = 0; i < 4; ++i) {
+    geometry_msgs::msg::Point32 pt32;
+    pt32.x = corners[i].x();
+    pt32.y = corners[i].y();
+    pt32.z = corners[i].z();
+    poly.polygon.points.push_back(pt32);
+  }
+
+  // Publish polygon for visualization
+  if (g_pub_poly) {
+    g_pub_poly->publish(poly);
+  }
+
+  // pose = toWorldFrame(pose);
+
+  // tf2::Quaternion q2(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w);
+  
+  // tf2::Matrix3x3 m(q2);
+  // m.getRPY(roll, pitch, yaw);
+
+  // RCLCPP_INFO(node_->get_logger(), "WORLD Yaw: %.3f, Pitch: %.3f, Roll: %.3f", 180*yaw/M_PI, 180*pitch/M_PI, 180*roll/M_PI);
+
 
   return true;
 
@@ -866,6 +1066,18 @@ cw2::SHAPE cw2::findAndClassifyShape()
 {
 
   filteringPipeline();
+    
+  PointCPtr output_cloud(new PointC);
+
+  double plane_z = getCentroid(*g_cloud_segmented_plane).z();
+
+  g_pt.setInputCloud(g_cloud_segmented_plane);
+  g_pt.setFilterFieldName("z");
+  g_pt.setFilterLimits(0, plane_z);
+  g_pt.setNegative(false);
+  g_pt.filter(*output_cloud);
+  g_cloud_segmented_plane.swap(output_cloud);
+
 
   RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
 
@@ -923,4 +1135,22 @@ PointT cw2::toWorldFrame(PointT local_point)
   }
 
   return PointT(world.point.x, world.point.y, world.point.z);
+}
+
+geometry_msgs::msg::Pose cw2::toWorldFrame(geometry_msgs::msg::Pose local_pose)
+{
+  geometry_msgs::msg::PoseStamped local, world;
+  local.header.frame_id = g_input_pc_frame_id;
+  local.header.stamp = latest_cloud_msg_->header.stamp;
+  local.pose = local_pose;
+
+
+  try {
+    tf_buffer_.transform(local, world, "panda_link0");
+  } catch (tf2::TransformException &ex) {
+    RCLCPP_WARN(node_->get_logger(), "Transform failed: %s", ex.what());
+    return local_pose;
+  }
+
+  return world.pose;
 }
