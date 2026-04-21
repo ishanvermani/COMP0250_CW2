@@ -1,107 +1,151 @@
-/* feel free to change any part of this file, or delete this file. In general,
-you can do whatever you want with this template code, including deleting it all
-and starting from scratch. The only requirment is to make sure your entire
-solution is contained within the cw2_team_<your_team_number> package */
-
-
-/*
-
-COMP0250 Coursework 2 - Team 11
-
-
-
-
-
-*/
-
-/**
- * KEY ASSUMPTIONS
- * * 
- * * */
-
+/* COMP0250 Coursework 2 - Team 11
+ *
+ * Task 1: Pick and place a nought or cross shape into a basket.
+ * Task 2: Shape detection (stub).
+ * Task 3: Planning and execution (stub).
+ */
 
 #include <cw2_class.h>
-#include <cmath>
-#include <utility>
 
-//go home panda, you're drunk
-static bool go_home(
-  moveit::planning_interface::MoveGroupInterface &m, const rclcpp::Logger &l)
+#include <utility>
+#include <thread>
+#include <chrono>
+#include <vector>
+#include <cmath>
+
+#include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
+#include <moveit_msgs/msg/robot_trajectory.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <pcl/filters/crop_box.h>
+#include <pcl/common/transforms.h> 
+
+
+
+static constexpr double FTIP = 0.105;  // link8 to fingertip offset
+
+static geometry_msgs::msg::Pose td_pose(double x, double y, double z)
 {
-  m.setNamedTarget("ready");
+  geometry_msgs::msg::Pose p;
+  p.position.x = x; 
+  p.position.y = y; 
+  p.position.z = z;
+
+  
+  double roll = M_PI; 
+  double pitch = 0.0;
+  double yaw = -M_PI/4.0;
+
+  double half_roll = roll / 2.0;
+  double half_pitch = pitch / 2.0;
+  double half_yaw = yaw / 2.0;
+
+  // Manual explicit Euler to Quaternion calculation
+  double qw = std::cos(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double qx = std::sin(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) - std::cos(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double qy = std::cos(half_roll) * std::sin(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::cos(half_pitch) * std::sin(half_yaw);
+  double qz = std::cos(half_roll) * std::cos(half_pitch) * std::sin(half_yaw) - std::sin(half_roll) * std::sin(half_pitch) * std::cos(half_yaw);
+
+  p.orientation.x = qx;
+  p.orientation.y = qy;
+  p.orientation.z = qz;
+  p.orientation.w = qw;
+  
+  return p;
+}
+
+static inline double ft2l8(double z) { return z + FTIP; }
+
+static bool joint_move(
+  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
+  const geometry_msgs::msg::Pose &t, const rclcpp::Logger &l,
+  const std::string &d, int n = 5)
+{
+  m->setPoseTarget(t);
+  for (int a = 1; a <= n; ++a) {
+    moveit::planning_interface::MoveGroupInterface::Plan p;
+    if (m->plan(p) != moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_WARN(l, "%s: plan %d/%d", d.c_str(), a, n); continue;
+    }
+    if (m->execute(p) == moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_INFO(l, "%s: OK", d.c_str()); return true;
+    }
+  }
+  RCLCPP_ERROR(l, "%s: FAIL", d.c_str()); return false;
+}
+
+static bool cart_move(
+  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
+  const geometry_msgs::msg::Pose &t, const rclcpp::Logger &l,
+  const std::string &d)
+{
+  std::vector<geometry_msgs::msg::Pose> w = {t};
+  moveit_msgs::msg::RobotTrajectory tr;
+  double f = m->computeCartesianPath(w, 0.005, 0.0, tr);
+  if (f >= 0.90 && m->execute(tr) == moveit::core::MoveItErrorCode::SUCCESS) {
+    RCLCPP_INFO(l, "%s: Cart OK (%.0f%%)", d.c_str(), f * 100); return true;
+  }
+  RCLCPP_WARN(l, "%s: Cart %.0f%%, joint fallback", d.c_str(), f * 100);
+  return joint_move(m, t, l, d);
+}
+
+static bool open_gripper(
+  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &h,
+  const rclcpp::Logger &l)
+{
+  h->setNamedTarget("open");
+  moveit::planning_interface::MoveGroupInterface::Plan p;
+
+  if (h->plan(p) != moveit::core::MoveItErrorCode::SUCCESS) return false;
+  if (h->execute(p) != moveit::core::MoveItErrorCode::SUCCESS) return false;
+  RCLCPP_INFO(l, "Gripper OPEN"); return true;
+}
+
+static void strong_grip(
+  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &h,
+  const rclcpp::Logger &l)
+{
+  
+  h->setMaxVelocityScalingFactor(0.05);
+  h->setMaxAccelerationScalingFactor(0.05);
+  RCLCPP_INFO(l, "  GRIP (j1=0.012)");
+  
+  
+  h->setJointValueTarget("panda_finger_joint1", 0.012);
+  h->setJointValueTarget("panda_finger_joint2", 0.012);
+  
+  moveit::planning_interface::MoveGroupInterface::Plan p;
+  if (h->plan(p) != moveit::core::MoveItErrorCode::SUCCESS) {
+    RCLCPP_WARN(l, "  Grip plan failed"); return;
+  }
+  h->execute(p);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  RCLCPP_INFO(l, "  Grip applied");
+}
+
+static bool go_home(
+  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
+  const rclcpp::Logger &l)
+{
+  m->setNamedTarget("ready");
   for (int a = 1; a <= 5; ++a) {
     moveit::planning_interface::MoveGroupInterface::Plan p;
-    if (m.plan(p) != moveit::core::MoveItErrorCode::SUCCESS) continue;
-    if (m.execute(p) == moveit::core::MoveItErrorCode::SUCCESS) {
-      RCLCPP_INFO(l, "moved to home"); return true; } }
-  RCLCPP_ERROR(l, "failed to go home"); return false;
+    if (m->plan(p) != moveit::core::MoveItErrorCode::SUCCESS) continue;
+    if (m->execute(p) == moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_INFO(l, "Home OK"); return true;
+    }
+  }
+  RCLCPP_ERROR(l, "Home FAIL"); return false;
 }
+
+
 
 cw2::cw2(const rclcpp::Node::SharedPtr &node)
 : node_(node),
   tf_buffer_(node->get_clock()),
-  tf_listener_(tf_buffer_)
+  tf_listener_(tf_buffer_),
+  g_cloud_ptr(new PointC)
 {
-
-
-//init values
-  g_cloud_ptr = std::make_shared<PointC>();
-  g_cloud_filtered = std::make_shared<PointC>();
-  g_cloud_plane = std::make_shared<PointC>();
-  g_cloud_segmented_plane = std::make_shared<PointC>();
-  g_cloud_cluster = std::make_shared<PointC>();
-  g_tree_ptr = std::make_shared<pcl::search::KdTree<PointT>>();
-  g_tree_ptr_euclidean = std::make_shared<pcl::search::KdTree<PointT>>();
-  g_cloud_normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
-  g_cloud_segmented_normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
-  g_inliers_plane = std::make_shared<pcl::PointIndices>();
-  g_coeff_plane = std::make_shared<pcl::ModelCoefficients>();
-
-  // PCL DEBUG VALUES
-  pcl_voxel_leaf_size_      = node_->declare_parameter("pcl.voxel_leaf_size",      pcl_voxel_leaf_size_);
-  pcl_pass_min_             = node_->declare_parameter("pcl.pass_min",             pcl_pass_min_);
-  pcl_pass_max_             = node_->declare_parameter("pcl.pass_max",             pcl_pass_max_);
-  pcl_pass_axis_            = node_->declare_parameter("pcl.pass_axis",            pcl_pass_axis_);
-  pcl_outlier_mean_k_       = node_->declare_parameter("pcl.outlier_mean_k",       pcl_outlier_mean_k_);
-  pcl_outlier_stddev_       = node_->declare_parameter("pcl.outlier_stddev",       pcl_outlier_stddev_);
-  pcl_normal_k_             = node_->declare_parameter("pcl.normal_k",             pcl_normal_k_);
-  pcl_plane_normal_weight_  = node_->declare_parameter("pcl.plane_normal_weight",  pcl_plane_normal_weight_);
-  pcl_plane_max_iterations_ = node_->declare_parameter("pcl.plane_max_iterations", pcl_plane_max_iterations_);
-  pcl_plane_distance_       = node_->declare_parameter("pcl.plane_distance",       pcl_plane_distance_);
-  pcl_cluster_tolerance_    = node_->declare_parameter("pcl.cluster_tolerance",    pcl_cluster_tolerance_);
-  pcl_cluster_min_size_     = node_->declare_parameter("pcl.cluster_min_size",     pcl_cluster_min_size_);
-  pcl_cluster_max_size_     = node_->declare_parameter("pcl.cluster_max_size",     pcl_cluster_max_size_);
-
-  // UPDATE CALLBACK FOR PCL DEBUGGING
-  param_cb_handle_= node_->add_on_set_parameters_callback(
-    [this](const std::vector<rclcpp::Parameter> &params)
-    {
-
-      RCLCPP_INFO_STREAM(node_->get_logger(), "Callback param reset triggered");
-
-      for (const auto &p : params) {
-        const auto &n = p.get_name();
-        if      (n == "pcl.voxel_leaf_size")      pcl_voxel_leaf_size_      = p.as_double();
-        else if (n == "pcl.pass_min")             pcl_pass_min_             = p.as_double();
-        else if (n == "pcl.pass_max")             pcl_pass_max_             = p.as_double();
-        else if (n == "pcl.pass_axis")            pcl_pass_axis_            = p.as_string();
-        else if (n == "pcl.outlier_mean_k")       pcl_outlier_mean_k_       = static_cast<int>(p.as_int());
-        else if (n == "pcl.outlier_stddev")       pcl_outlier_stddev_       = p.as_double();
-        else if (n == "pcl.normal_k")             pcl_normal_k_             = static_cast<int>(p.as_int());
-        else if (n == "pcl.plane_normal_weight")  pcl_plane_normal_weight_  = p.as_double();
-        else if (n == "pcl.plane_max_iterations") pcl_plane_max_iterations_ = static_cast<int>(p.as_int());
-        else if (n == "pcl.plane_distance")       pcl_plane_distance_       = p.as_double();
-        else if (n == "pcl.cluster_tolerance")    pcl_cluster_tolerance_    = p.as_double();
-        else if (n == "pcl.cluster_min_size")     pcl_cluster_min_size_     = static_cast<int>(p.as_int());
-        else if (n == "pcl.cluster_max_size")     pcl_cluster_max_size_     = static_cast<int>(p.as_int());
-      }
-      rcl_interfaces::msg::SetParametersResult result;
-      result.successful = true;
-
-      processCloud();
-      return result;
-    });
-
   t1_service_ = node_->create_service<cw2_world_spawner::srv::Task1Service>(
     "/task1_start",
     std::bind(&cw2::t1_callback, this, std::placeholders::_1, std::placeholders::_2));
@@ -112,21 +156,6 @@ cw2::cw2(const rclcpp::Node::SharedPtr &node)
     "/task3_start",
     std::bind(&cw2::t3_callback, this, std::placeholders::_1, std::placeholders::_2));
 
-  //debug publishers
-  g_pub_cloud = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud", 1);
-  g_pub_passthrough = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_passthrough", 1);
-  g_pub_outlier = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_outlier", 1);
-  g_pub_plane = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_plane", 1);
-  g_pub_cluster1 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster1", 1);
-  g_pub_cluster2 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster2", 1);
-  g_pub_cluster3 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster3", 1);
-  g_pub_cluster4 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster4", 1);
-  g_pub_cluster5 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster5", 1);
-  g_pub_cluster6 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster6", 1);
-
-  g_pub_clusters = {g_pub_cluster1, g_pub_cluster2, g_pub_cluster3, g_pub_cluster4, g_pub_cluster5, g_pub_cluster6};
-
-  
   pointcloud_topic_ = node_->declare_parameter<std::string>(
     "pointcloud_topic", "/r200/camera/depth_registered/points");
   pointcloud_qos_reliable_ =
@@ -151,24 +180,24 @@ cw2::cw2(const rclcpp::Node::SharedPtr &node)
   arm_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(node_, "panda_arm");
   hand_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(node_, "hand");
 
-  RCLCPP_INFO(
-    node_->get_logger(),
-    "cw2_team_11 template initialised with pointcloud topic '%s' (%s QoS)",
-    pointcloud_topic_.c_str(),
-    pointcloud_qos_reliable_ ? "reliable" : "sensor-data");
+  
+  arm_group_->setPlanningTime(10.0);
+  arm_group_->setNumPlanningAttempts(10);
+  arm_group_->setMaxVelocityScalingFactor(0.5);
+  arm_group_->setMaxAccelerationScalingFactor(0.5);
+
+  RCLCPP_INFO(node_->get_logger(), "CW2 Team 11 initialised");
 }
+
+
 
 void cw2::cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg)
 {
   pcl::PCLPointCloud2 pcl_cloud;
   pcl_conversions::toPCL(*msg, pcl_cloud);
 
-  latest_cloud_msg_ = msg;
-
   PointCPtr latest_cloud(new PointC);
   pcl::fromPCLPointCloud2(pcl_cloud, *latest_cloud);
-
-  *g_cloud_filtered = *latest_cloud;
 
   std::lock_guard<std::mutex> lock(cloud_mutex_);
   g_input_pc_frame_id_ = msg->header.frame_id;
@@ -176,6 +205,9 @@ void cw2::cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg
   ++g_cloud_sequence_;
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// Task 1: Pick and Place
+///////////////////////////////////////////////////////////////////////////////
 
 void cw2::t1_callback(
   const std::shared_ptr<cw2_world_spawner::srv::Task1Service::Request> request,
@@ -184,142 +216,193 @@ void cw2::t1_callback(
   (void)response;
   auto L = node_->get_logger();
 
-  RCLCPP_INFO(L, "Starting Task 1: Safe Crane Trajectory Maneuver");
+  // Log raw input frames
+  RCLCPP_INFO(L, "=== Task 1 ===");
+  RCLCPP_INFO(L, "Object frame: '%s'  Goal frame: '%s'",
+              request->object_point.header.frame_id.c_str(),
+              request->goal_point.header.frame_id.c_str());
 
-  static const std::string planning_group = "panda_arm";
-  moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
-  moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
-
-  move_group2.setPlanningTime(5.0);
-  move_group2.setMaxVelocityScalingFactor(0.2);
-  move_group2.setMaxAccelerationScalingFactor(0.2);
-
-  hand_group.setMaxVelocityScalingFactor(1.0);
-  hand_group.setMaxAccelerationScalingFactor(1.0);
-
-  // --- 1. PRE-CALCULATE ALL POSITIONS ---
-  double grip_x, grip_y;
-  double basket_x, basket_y;
   
-  double grip_z = request->object_point.point.z + 0.15;
-  double basket_z = request->goal_point.point.z + 0.5;
-  
-  // Safe high clearance to avoid random obstacles
-  double safe_z = request->object_point.point.z + 0.65; 
-
-  if (request->shape_type == "nought") {
-    RCLCPP_INFO(L, "Applying nought offsets");
-    grip_x = request->object_point.point.x;
-    grip_y = request->object_point.point.y - 0.08;
-    basket_x = request->goal_point.point.x;
-    basket_y = request->goal_point.point.y - 0.05;
-  } else {
-    RCLCPP_INFO(L, "Applying cross offsets");
-    grip_x = request->object_point.point.x - 0.05;
-    grip_y = request->object_point.point.y;
-    basket_x = request->goal_point.point.x - 0.02;
-    basket_y = request->goal_point.point.y;
+  geometry_msgs::msg::PointStamped obj_world, goal_world;
+  const std::string target_frame = "panda_link0";
+  try {
+    obj_world = tf_buffer_.transform(request->object_point, target_frame,
+                                     tf2::durationFromSec(2.0));
+    goal_world = tf_buffer_.transform(request->goal_point, target_frame,
+                                      tf2::durationFromSec(2.0));
+  } catch (const tf2::TransformException &ex) {
+    RCLCPP_ERROR(L, "TF transform failed: %s", ex.what());
+    return;
   }
 
-  // --- 2. SET FIXED DOWNWARD ORIENTATION ---
-  double roll = M_PI; // 180 degrees
-  double pitch = 0;
-  double yaw = - M_PI / 4; // -45 degrees
+  const double ox = obj_world.point.x;
+  const double oy = obj_world.point.y;
+  const double oz = obj_world.point.z;
+  const double gx = goal_world.point.x;
+  const double gy = goal_world.point.y;
+  const double gz = goal_world.point.z;
+  const std::string shape = request->shape_type;
 
-  double half_roll = roll / 2.0;
-  double half_pitch = pitch / 2.0;
-  double half_yaw = yaw / 2.0;
+  RCLCPP_INFO(L, "Shape: %s at (%.4f, %.4f, %.4f) [world]", shape.c_str(), ox, oy, oz);
+  RCLCPP_INFO(L, "Basket at (%.4f, %.4f, %.4f) [world]", gx, gy, gz);
 
-  double w = std::cos(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
-  double x = std::sin(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) - std::cos(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
-  double y = std::cos(half_roll) * std::sin(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::cos(half_pitch) * std::sin(half_yaw);
-  double z = std::cos(half_roll) * std::cos(half_pitch) * std::sin(half_yaw) - std::sin(half_roll) * std::sin(half_pitch) * std::cos(half_yaw);
+  double gx_pick, gy_pick;
+  double gx_drop, gy_drop;
 
-  geometry_msgs::msg::Pose target_pose;
-  target_pose.orientation.x = x; 
-  target_pose.orientation.y = y;
-  target_pose.orientation.z = z;
-  target_pose.orientation.w = w;
+  if (shape == "nought") {
+    RCLCPP_INFO(L, "Applying nought offsets");
+    gx_pick = ox;
+    gy_pick = oy - 0.08;
+    gx_drop = gx;
+    gy_drop = gy - 0.05;
+  } else {
+    RCLCPP_INFO(L, "Applying cross offsets");
+    gx_pick = ox + 0.05;
+    gy_pick = oy;
+    gx_drop = gx + 0.02;
+    gy_drop = gy;
+  }
 
-  moveit::planning_interface::MoveGroupInterface::Plan arm_plan;
-  moveit::planning_interface::MoveGroupInterface::Plan hand_plan;
-  bool success;
+  // const double shape_centroid_z = 0.020;           
+  // const double grasp_l8     = ft2l8(shape_centroid_z + 0.015); 
+  // const double pre_grasp_l8 = grasp_l8 + 0.085;    
+  // const double transit_l8   = 0.40;                 
+  // const double release_l8   = ft2l8(gz + 0.10);  
 
+  
 
-  // --- 3. EXECUTE CRANE TRAJECTORY ---
+  // RCLCPP_INFO(L, "Heights: grasp_l8=%.4f pre_grasp=%.4f transit=%.4f release=%.4f",
+  //             grasp_l8, pre_grasp_l8, transit_l8, release_l8);
 
-  // Move A: Translate HIGH above the shape
+  double grip_z = request->object_point.point.z + 0.15;
+  double basket_z = request->goal_point.point.z + 0.2;
+  double safe_z = request->object_point.point.z + 0.65;
+
+  auto fail = [&]() {
+    open_gripper(hand_group_, L);
+    go_home(arm_group_, L);
+  };
+
+  // ─picking up shape
+
+  // go_home(arm_group_, L);
+
+  
+  // if (!joint_move(arm_group_, td_pose(gx_pick, gy_pick, transit_l8), L, "Above shape")) {
+  //   fail(); return;
+  // }
+
+  
+  // if (!open_gripper(hand_group_, L)) { fail(); return; }
+
+  
+  // if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, pre_grasp_l8), L, "Pre-grasp")) {
+  //   fail(); return;
+  // }
+
+  
+  // arm_group_->setMaxVelocityScalingFactor(0.1);
+  // arm_group_->setMaxAccelerationScalingFactor(0.1);
+  // if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, grasp_l8), L, "Descend")) {
+  //   fail(); return;
+  // }
+
+  // // Grip
+  // strong_grip(hand_group_, L);
+
+  
+  // arm_group_->setMaxVelocityScalingFactor(0.5);
+  // arm_group_->setMaxAccelerationScalingFactor(0.5);
+  // if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, transit_l8), L, "Lift")) {
+  //   fail(); return;
+  // }
+
+  // // placing the object
+
+  
+  // if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, transit_l8), L, "Above basket")) {
+  //   fail(); return;
+  // }
+
+  
+  // if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, release_l8), L, "Lower")) {
+  //   fail(); return;
+  // }
+
+  
+  // if (!open_gripper(hand_group_, L)) { fail(); return; }
+
+  // cart_move(arm_group_, td_pose(gx_drop, gy_drop, transit_l8), L, "Retreat");
+  // go_home(arm_group_, L);
+
+  go_home(arm_group_, L);
+  // Move 1
   RCLCPP_INFO(L, "Move A: Moving high above shape");
-  target_pose.position.x = grip_x;
-  target_pose.position.y = grip_y;
-  target_pose.position.z = safe_z;
-  move_group2.setPoseTarget(target_pose);
-  success = (move_group2.plan(arm_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  move_group2.execute(arm_plan);
+  if (!joint_move(arm_group_, td_pose(gx_pick, gy_pick, safe_z), L, "Move A")) { fail(); return; }
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // Move B: Descend straight down to grip position
+  if (!open_gripper(hand_group_, L)) { fail(); return; }
+
+  // Move 2
   RCLCPP_INFO(L, "Move B: Descending to grip");
-  target_pose.position.z = grip_z;
-  move_group2.setPoseTarget(target_pose);
-  success = (move_group2.plan(arm_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  move_group2.execute(arm_plan);
+  arm_group_->setMaxVelocityScalingFactor(0.1);
+  arm_group_->setMaxAccelerationScalingFactor(0.1);
+  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, grip_z), L, "Move B")) { fail(); return; }
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // Move C: Close the gripper
+  //Move 3
   RCLCPP_INFO(L, "Move C: Closing gripper. I WANT THE BIG BUNNY");
-  hand_group.setJointValueTarget("panda_finger_joint1", 0.020); 
-  success = (hand_group.plan(hand_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  hand_group.execute(hand_plan);
-  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  strong_grip(hand_group_, L);
 
-  // Move D: Lift straight up to safe height
+  //Move 4
   RCLCPP_INFO(L, "Move D: Lifting object to safe height");
-  target_pose.position.z = safe_z;
-  move_group2.setPoseTarget(target_pose);
-  success = (move_group2.plan(arm_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  move_group2.execute(arm_plan);
+  arm_group_->setMaxVelocityScalingFactor(0.5);
+  arm_group_->setMaxAccelerationScalingFactor(0.5);
+  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, safe_z), L, "Move D")) { fail(); return; }
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // Move E: Translate across to basket at safe height
+  //Move 5
   RCLCPP_INFO(L, "Move E: Translating over obstacles to basket");
-  target_pose.position.x = basket_x;
-  target_pose.position.y = basket_y;
-  target_pose.position.z = safe_z;
-  move_group2.setPoseTarget(target_pose);
-  success = (move_group2.plan(arm_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  move_group2.execute(arm_plan);
+  if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move E")) { fail(); return; }
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // // Move F: Descend into basket
-  // RCLCPP_INFO(L, "Move F: Descending into basket");
-  // target_pose.position.z = basket_z;
-  // move_group2.setPoseTarget(target_pose);
-  // success = (move_group2.plan(arm_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  // move_group2.execute(arm_plan);
-  // std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  //Move 6
+  RCLCPP_INFO(L, "Move F: Descending into basket");
+   if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, basket_z), L, "Move F")) { fail(); return; }
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // Move G: Open the gripper
+  
+
+  // //Move 7
+  // if (!open_gripper(hand_group_, L)) { fail(); return; }
   RCLCPP_INFO(L, "Move G: KOBE! Releasing shape");
+  moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
+  hand_group.setMaxVelocityScalingFactor(1.0);
+  hand_group.setMaxAccelerationScalingFactor(1.0);
+  moveit::planning_interface::MoveGroupInterface::Plan hand_plan;
   hand_group.setNamedTarget("open");
-  success = (hand_group.plan(hand_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  bool success = (hand_group.plan(hand_plan) == moveit::core::MoveItErrorCode::SUCCESS);
   hand_group.execute(hand_plan);
-  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // // Move H: Retreat straight up to avoid knocking the basket
-  // RCLCPP_INFO(L, "Move H: Retreating up from basket");
-  // target_pose.position.z = safe_z;
-  // move_group2.setPoseTarget(target_pose);
-  // success = (move_group2.plan(arm_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  // move_group2.execute(arm_plan);
-  // std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  RCLCPP_INFO(L, "Move E: Translating over obstacles to basket");
+  if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move E")) { fail(); return; }
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // --- ADDED: RETURN TO HOME ---
+  //Move 8
   RCLCPP_INFO(L, "Returning to 'ready' home position...");
-  go_home(move_group2, L);
-  std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Delay for RViz and ROS sync
-  // -----------------------------
+  go_home(arm_group_, L);
+  std::this_thread::sleep_for(std::chrono::milliseconds(500)); 
+
+
+
+  RCLCPP_INFO(L, "=== Task 1 complete ===");
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Task 2: Shape Detection (stub)
+///////////////////////////////////////////////////////////////////////////////
+
 void cw2::t2_callback(
   const std::shared_ptr<cw2_world_spawner::srv::Task2Service::Request> request,
   std::shared_ptr<cw2_world_spawner::srv::Task2Service::Response> response)
@@ -532,10 +615,6 @@ success = (move_group3.plan(plan8) == moveit::core::MoveItErrorCode::SUCCESS);
 move_group3.execute(plan8);
 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 }
-
-//PCL FUNCTIONS
-
-
 void cw2::applyVoxelGrid(double g_leaf_size)
 {
   

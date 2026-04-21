@@ -181,20 +181,14 @@ void cw2::t1_callback(
   const std::shared_ptr<cw2_world_spawner::srv::Task1Service::Request> request,
   std::shared_ptr<cw2_world_spawner::srv::Task1Service::Response> response)
 {
-
   (void)response;
   auto L = node_->get_logger();
 
-    RCLCPP_INFO(L, " Moving camera right above shape at (%.3f, %.3f, %.3f)",
-              request->object_point.point.x,
-              request->object_point.point.y,
-              request->object_point.point.z);
+  RCLCPP_INFO(L, "Starting Task 1: Safe Crane Trajectory Maneuver");
 
-  
   static const std::string planning_group = "panda_arm";
   moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
   moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
-
 
   move_group2.setPlanningTime(5.0);
   move_group2.setMaxVelocityScalingFactor(0.2);
@@ -203,23 +197,35 @@ void cw2::t1_callback(
   hand_group.setMaxVelocityScalingFactor(1.0);
   hand_group.setMaxAccelerationScalingFactor(1.0);
 
+  // --- 1. PRE-CALCULATE ALL POSITIONS ---
+  double grip_x, grip_y;
+  double basket_x, basket_y;
   
+  double grip_z = request->object_point.point.z + 0.15;
+  double basket_z = request->goal_point.point.z + 0.5;
+  
+  // Safe high clearance to avoid random obstacles
+  double safe_z = request->object_point.point.z + 0.65; 
 
+  if (request->shape_type == "nought") {
+    RCLCPP_INFO(L, "Applying nought offsets");
+    grip_x = request->object_point.point.x;
+    grip_y = request->object_point.point.y - 0.08;
+    basket_x = request->goal_point.point.x;
+    basket_y = request->goal_point.point.y - 0.05;
+  } else {
+    RCLCPP_INFO(L, "Applying cross offsets");
+    grip_x = request->object_point.point.x - 0.05;
+    grip_y = request->object_point.point.y;
+    basket_x = request->goal_point.point.x - 0.02;
+    basket_y = request->goal_point.point.y;
+  }
 
-  geometry_msgs::msg::Pose target_pose;
-
-  double camera_x_offset = 0.03;
-  double camera_y_offset = 0;
-
-  target_pose.position.x = request->object_point.point.x; //- camera_x_offset;
-  target_pose.position.y = request->object_point.point.y; //+ camera_y_offset;
-  target_pose.position.z = request->object_point.point.z + 0.6;
-
+  // --- 2. SET FIXED DOWNWARD ORIENTATION ---
   double roll = M_PI; // 180 degrees
   double pitch = 0;
   double yaw = - M_PI / 4; // -45 degrees
 
-  //for the quaternions
   double half_roll = roll / 2.0;
   double half_pitch = pitch / 2.0;
   double half_yaw = yaw / 2.0;
@@ -229,108 +235,91 @@ void cw2::t1_callback(
   double y = std::cos(half_roll) * std::sin(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::cos(half_pitch) * std::sin(half_yaw);
   double z = std::cos(half_roll) * std::cos(half_pitch) * std::sin(half_yaw) - std::sin(half_roll) * std::sin(half_pitch) * std::cos(half_yaw);
 
+  geometry_msgs::msg::Pose target_pose;
   target_pose.orientation.x = x; 
   target_pose.orientation.y = y;
   target_pose.orientation.z = z;
   target_pose.orientation.w = w;
-  move_group2.setPoseTarget(target_pose);
-  moveit::planning_interface::MoveGroupInterface::Plan plan;
 
-  bool success = (move_group2.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  move_group2.execute(plan);
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  moveit::planning_interface::MoveGroupInterface::Plan arm_plan;
+  moveit::planning_interface::MoveGroupInterface::Plan hand_plan;
+  bool success;
 
-  
-  // Lets do the grippy
-  
-  RCLCPP_INFO(L, "Starting gripping sequence for shape: %s", request->shape_type.c_str());
 
-  moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
-  hand_group.setMaxVelocityScalingFactor(1.0);
-  hand_group.setMaxAccelerationScalingFactor(1.0);
+  // --- 3. EXECUTE CRANE TRAJECTORY ---
 
-  // Declare the coordinate variables
-  double grip_x, grip_y;
-  double basket_x, basket_y;
-  
-  double grip_z = request->object_point.point.z + 0.15;
-  double basket_z = request->goal_point.point.z + 0.5;
-
-  // iffy iffy
-  if (request->shape_type == "nought") {
-    RCLCPP_INFO(L, "Applying nought offsets");
-    grip_x = request->object_point.point.x;
-    grip_y = request->object_point.point.y - 0.08;
-    
-    basket_x = request->goal_point.point.x;
-    basket_y = request->goal_point.point.y - 0.05;
-  } 
-  else {
-    RCLCPP_INFO(L, "Applying cross offsets");
-    grip_x = request->object_point.point.x - 0.05;
-    grip_y = request->object_point.point.y;
-    
-    basket_x = request->goal_point.point.x - 0.02;
-    basket_y = request->goal_point.point.y;
-  }
-
-  // Move to the grasp position
+  // Move A: Translate HIGH above the shape
+  RCLCPP_INFO(L, "Move A: Moving high above shape");
   target_pose.position.x = grip_x;
   target_pose.position.y = grip_y;
-  target_pose.position.z = grip_z;
-
+  target_pose.position.z = safe_z;
   move_group2.setPoseTarget(target_pose);
-  moveit::planning_interface::MoveGroupInterface::Plan grasp_plan;
-  success = (move_group2.plan(grasp_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  move_group2.execute(grasp_plan);
+  success = (move_group2.plan(arm_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  move_group2.execute(arm_plan);
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // Close the gripper
-  RCLCPP_INFO(L, "Closing gripper. TOUT TOUT TOUT. I WANT THE BIG BUNNY");
+  // Move B: Descend straight down to grip position
+  RCLCPP_INFO(L, "Move B: Descending to grip");
+  target_pose.position.z = grip_z;
+  move_group2.setPoseTarget(target_pose);
+  success = (move_group2.plan(arm_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  move_group2.execute(arm_plan);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  // Move C: Close the gripper
+  RCLCPP_INFO(L, "Move C: Closing gripper. I WANT THE BIG BUNNY");
   hand_group.setJointValueTarget("panda_finger_joint1", 0.020); 
-  moveit::planning_interface::MoveGroupInterface::Plan close_plan;
-  success = (hand_group.plan(close_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  hand_group.execute(close_plan);
+  success = (hand_group.plan(hand_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  hand_group.execute(hand_plan);
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-  
-  // LIFTING THE OBJECT UP
-  RCLCPP_INFO(L, "Lifting the object up. TOUT TOUT TOUT. I WANT THE BIG BUNNY");
-  target_pose.position.z = grip_z + 0.5;
+  // Move D: Lift straight up to safe height
+  RCLCPP_INFO(L, "Move D: Lifting object to safe height");
+  target_pose.position.z = safe_z;
   move_group2.setPoseTarget(target_pose);
-  moveit::planning_interface::MoveGroupInterface::Plan lift_plan;
-  success = (move_group2.plan(lift_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  move_group2.execute(lift_plan);
+  success = (move_group2.plan(arm_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  move_group2.execute(arm_plan);
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // Move to the basket
-  RCLCPP_INFO(L, "Lets score some 3s");
+  // Move E: Translate across to basket at safe height
+  RCLCPP_INFO(L, "Move E: Translating over obstacles to basket");
   target_pose.position.x = basket_x;
   target_pose.position.y = basket_y;
-  target_pose.position.z = basket_z;
-
+  target_pose.position.z = safe_z;
   move_group2.setPoseTarget(target_pose);
-  moveit::planning_interface::MoveGroupInterface::Plan move_to_basket_plan;
-  success = (move_group2.plan(move_to_basket_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  move_group2.execute(move_to_basket_plan);
+  success = (move_group2.plan(arm_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  move_group2.execute(arm_plan);
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // Open the gripper to release the object
-  RCLCPP_INFO(L, "KOBE!");
+  // // Move F: Descend into basket
+  // RCLCPP_INFO(L, "Move F: Descending into basket");
+  // target_pose.position.z = basket_z;
+  // move_group2.setPoseTarget(target_pose);
+  // success = (move_group2.plan(arm_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  // move_group2.execute(arm_plan);
+  // std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  // Move G: Open the gripper
+  RCLCPP_INFO(L, "Move G: KOBE! Releasing shape");
   hand_group.setNamedTarget("open");
-  moveit::planning_interface::MoveGroupInterface::Plan final_open_plan;
-  success = (hand_group.plan(final_open_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  hand_group.execute(final_open_plan);
+  success = (hand_group.plan(hand_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  hand_group.execute(hand_plan);
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-  //time to go home
-  RCLCPP_INFO(L, "goodbye everybody, Ive got to go, gotta leave you all behind and face the truth");
-  RCLCPP_INFO(L, "goodbye and thank you for all the fish");
-  go_home(move_group2, L);
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  
-}
+  // // Move H: Retreat straight up to avoid knocking the basket
+  // RCLCPP_INFO(L, "Move H: Retreating up from basket");
+  // target_pose.position.z = safe_z;
+  // move_group2.setPoseTarget(target_pose);
+  // success = (move_group2.plan(arm_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  // move_group2.execute(arm_plan);
+  // std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
+  // --- ADDED: RETURN TO HOME ---
+  RCLCPP_INFO(L, "Returning to 'ready' home position...");
+  go_home(move_group2, L);
+  std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Delay for RViz and ROS sync
+  // -----------------------------
+}
 void cw2::t2_callback(
   const std::shared_ptr<cw2_world_spawner::srv::Task2Service::Request> request,
   std::shared_ptr<cw2_world_spawner::srv::Task2Service::Response> response)
