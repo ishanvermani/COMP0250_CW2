@@ -396,26 +396,154 @@ void cw2::t3_callback(
   std::shared_ptr<cw2_world_spawner::srv::Task3Service::Response> response)
 {
   (void)request;
-  response->total_num_shapes = 0;
-  response->num_most_common_shape = 0;
-  response->most_common_shape_vector.clear();
+  auto L = node_->get_logger();
+  RCLCPP_INFO(L, "Starting Task 3: Explicit Perimeter Sweep...");
 
-  std::string frame_id;
-  std::size_t point_count = 0;
-  std::uint64_t sequence = 0;
-  {
-    std::lock_guard<std::mutex> lock(cloud_mutex_);
-    frame_id = g_input_pc_frame_id_;
-    point_count = g_cloud_ptr ? g_cloud_ptr->size() : 0;
-    sequence = g_cloud_sequence_;
-  }
+  static const std::string planning_group = "panda_arm";
+  moveit::planning_interface::MoveGroupInterface move_group3(node_, planning_group);
 
-  RCLCPP_WARN(
-    node_->get_logger(),
-    "Task 3 is not implemented in cw2_team_11. Latest cloud: seq=%llu frame='%s' points=%zu",
-    static_cast<unsigned long long>(sequence),
-    frame_id.c_str(),
-    point_count);
+  move_group3.setPlanningTime(10.0); //maybe chabge that to 5 seconds
+  move_group3.setMaxVelocityScalingFactor(0.2);
+  move_group3.setMaxAccelerationScalingFactor(0.2);
+  
+  geometry_msgs::msg::Pose target_pose; // Declare target_pose here so it can be reused for all three moves (we will just update the position each time)
+
+  double roll = M_PI; // 180 degrees
+  double pitch = 0.0;
+  double yaw = -M_PI / 4.0; // -45 degrees
+
+  double half_roll = roll / 2.0;
+  double half_pitch = pitch / 2.0;
+  double half_yaw = yaw / 2.0;
+
+
+  double w = std::cos(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double x = std::sin(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) - std::cos(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double y = std::cos(half_roll) * std::sin(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::cos(half_pitch) * std::sin(half_yaw);
+  double z = std::cos(half_roll) * std::cos(half_pitch) * std::sin(half_yaw) - std::sin(half_roll) * std::sin(half_pitch) * std::cos(half_yaw);
+ 
+  target_pose.orientation.x = x; 
+  target_pose.orientation.y = y;
+  target_pose.orientation.z = z;
+  target_pose.orientation.w = w; 
+
+//Move 1
+
+target_pose.position.x = -0.45;
+target_pose.position.y = 0.35;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan1;
+
+bool success = (move_group3.plan(plan1) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan1);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+findAndClassifyShape();
+
+//Move 1.2
+target_pose.position.x = 0;
+target_pose.position.y = 0.35;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan2;
+
+success = (move_group3.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan2);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+findAndClassifyShape();
+
+//Move 2
+target_pose.position.x = 0.45;
+target_pose.position.y = 0.35;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan3;
+
+success = (move_group3.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan3);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+findAndClassifyShape();
+
+//Move 2.2
+
+target_pose.position.x = 0.45;
+target_pose.position.y = 0;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan4;
+
+success = (move_group3.plan(plan4) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan4);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+findAndClassifyShape();
+
+//Move 3
+
+target_pose.position.x = 0.45;
+target_pose.position.y = -0.35;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan5;
+
+success = (move_group3.plan(plan5) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan5);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+findAndClassifyShape();
+
+//Move 3.2
+
+target_pose.position.x = 0;
+target_pose.position.y = -0.35;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan6;
+
+success = (move_group3.plan(plan6) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan6);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+findAndClassifyShape();
+
+//Move 4
+
+target_pose.position.x = -0.45;
+target_pose.position.y = -0.35;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan7;
+
+success = (move_group3.plan(plan7) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan7);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+findAndClassifyShape();
+
+//Move 4.2
+
+target_pose.position.x = -0.45;
+target_pose.position.y = 0;
+target_pose.position.z = 0.65;
+
+move_group3.setPoseTarget(target_pose);
+moveit::planning_interface::MoveGroupInterface::Plan plan8;
+
+success = (move_group3.plan(plan8) == moveit::core::MoveItErrorCode::SUCCESS);
+move_group3.execute(plan8);
+std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+findAndClassifyShape();
 }
 
 
@@ -645,10 +773,10 @@ bool cw2::classifyShape(PointCPtr in_cloud_ptr, cw2::SHAPE &shape)
     rotation_OBB(2,0), rotation_OBB(2,1), rotation_OBB(2,2));
 
   
-  RCLCPP_INFO(node_->get_logger(), "Delta Pre world: x=%.1f y=%.1f z=%.1f", 1000*abs(max_OBB.x - min_OBB.x), 1000*abs(max_OBB.y - min_OBB.y), 1000*abs(max_OBB.z - min_OBB.z));
+  // RCLCPP_INFO(node_->get_logger(), "Delta Pre world: x=%.1f y=%.1f z=%.1f", 1000*abs(max_OBB.x - min_OBB.x), 1000*abs(max_OBB.y - min_OBB.y), 1000*abs(max_OBB.z - min_OBB.z));
 
-  max_OBB = toWorldFrame(max_OBB);
-  min_OBB = toWorldFrame(min_OBB);
+  // max_OBB = toWorldFrame(max_OBB);
+  // min_OBB = toWorldFrame(min_OBB);
 
 
   RCLCPP_INFO(node_->get_logger(), "Delta: x=%.1f y=%.1f z=%.1f", 1000*abs(max_OBB.x - min_OBB.x), 1000*abs(max_OBB.y - min_OBB.y), 1000*abs(max_OBB.z - min_OBB.z));
@@ -1043,6 +1171,7 @@ std::string cw2::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
   //check to see if closest color is in range
   if (min_dist < threshold)
   {
+    RCLCPP_INFO(node_->get_logger(), "assigned %s", color_names[min_color_idx].c_str());
     return color_names[min_color_idx];
   }
   else
@@ -1090,8 +1219,9 @@ cw2::SHAPE cw2::findAndClassifyShape()
     
     if(classifyShape(shapes[i], ref_shape))
     {
-      break;
+      //break;
     }
+    colorOfPointCloud(*shapes[i], 0.3);
   }
 
   return ref_shape;
