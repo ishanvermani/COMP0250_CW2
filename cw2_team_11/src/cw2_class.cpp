@@ -25,27 +25,57 @@
 static constexpr double FTIP = 0.105;  // link8 to fingertip offset
 
 
-static geometry_msgs::msg::Pose td_pose(double x, double y, double z, double yaw = 0.0)
+// static geometry_msgs::msg::Pose td_pose(double x, double y, double z, double yaw = 0.0)
+// {
+//   geometry_msgs::msg::Pose p;
+//   p.position.x = x; p.position.y = y; p.position.z = z;
+
+  
+//   tf2::Quaternion q_down;
+//   q_down.setRPY(M_PI, 0.0, 0.0); 
+
+  
+//   tf2::Quaternion q_yaw;
+//   q_yaw.setRPY(0.0, 0.0, yaw);
+
+  
+//   tf2::Quaternion q_final = q_yaw * q_down;
+//   q_final.normalize();
+
+//   p.orientation.x = q_final.x();
+//   p.orientation.y = q_final.y();
+//   p.orientation.z = q_final.z();
+//   p.orientation.w = q_final.w();
+//   return p;
+// }
+
+static geometry_msgs::msg::Pose td_pose(double x, double y, double z)
 {
   geometry_msgs::msg::Pose p;
-  p.position.x = x; p.position.y = y; p.position.z = z;
+  p.position.x = x; 
+  p.position.y = y; 
+  p.position.z = z;
 
   
-  tf2::Quaternion q_down;
-  q_down.setRPY(M_PI, 0.0, 0.0); 
+  double roll = M_PI; 
+  double pitch = 0.0;
+  double yaw = -M_PI/4.0;
 
+  double half_roll = roll / 2.0;
+  double half_pitch = pitch / 2.0;
+  double half_yaw = yaw / 2.0;
+
+  // Manual explicit Euler to Quaternion calculation
+  double qw = std::cos(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double qx = std::sin(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) - std::cos(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double qy = std::cos(half_roll) * std::sin(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::cos(half_pitch) * std::sin(half_yaw);
+  double qz = std::cos(half_roll) * std::cos(half_pitch) * std::sin(half_yaw) - std::sin(half_roll) * std::sin(half_pitch) * std::cos(half_yaw);
+
+  p.orientation.x = qx;
+  p.orientation.y = qy;
+  p.orientation.z = qz;
+  p.orientation.w = qw;
   
-  tf2::Quaternion q_yaw;
-  q_yaw.setRPY(0.0, 0.0, yaw);
-
-  
-  tf2::Quaternion q_final = q_yaw * q_down;
-  q_final.normalize();
-
-  p.orientation.x = q_final.x();
-  p.orientation.y = q_final.y();
-  p.orientation.z = q_final.z();
-  p.orientation.w = q_final.w();
   return p;
 }
 
@@ -133,61 +163,61 @@ static bool go_home(
 }
 
 
-static double get_shape_yaw(const PointCPtr& cloud, double ox, double oy, double oz, const rclcpp::Logger &l) {
-  if (!cloud || cloud->empty()) {
-    RCLCPP_WARN(l, "Point cloud is empty! Defaulting yaw to 0.");
-    return 0.0;
-  }
+// static double get_shape_yaw(const PointCPtr& cloud, double ox, double oy, double oz, const rclcpp::Logger &l) {
+//   if (!cloud || cloud->empty()) {
+//     RCLCPP_WARN(l, "Point cloud is empty! Defaulting yaw to 0.");
+//     return 0.0;
+//   }
 
   
-  pcl::CropBox<PointT> crop;
-  crop.setInputCloud(cloud);
-  crop.setMin(Eigen::Vector4f(ox - 0.25, oy - 0.25, oz - 0.015, 1.0));
-  crop.setMax(Eigen::Vector4f(ox + 0.25, oy + 0.25, oz + 0.025, 1.0));
+//   pcl::CropBox<PointT> crop;
+//   crop.setInputCloud(cloud);
+//   crop.setMin(Eigen::Vector4f(ox - 0.25, oy - 0.25, oz - 0.015, 1.0));
+//   crop.setMax(Eigen::Vector4f(ox + 0.25, oy + 0.25, oz + 0.025, 1.0));
 
-  PointCPtr cropped_cloud(new PointC);
-  crop.filter(*cropped_cloud);
+//   PointCPtr cropped_cloud(new PointC);
+//   crop.filter(*cropped_cloud);
 
-  if (cropped_cloud->empty()) {
-    RCLCPP_WARN(l, "No points found in crop box! Defaulting yaw to 0.");
-    return 0.0;
-  }
-
-  
-  double best_yaw = 0.0;
-  double min_area = std::numeric_limits<double>::max();
+//   if (cropped_cloud->empty()) {
+//     RCLCPP_WARN(l, "No points found in crop box! Defaulting yaw to 0.");
+//     return 0.0;
+//   }
 
   
-  for (int angle_deg = 0; angle_deg < 90; ++angle_deg) {
-    double angle_rad = angle_deg * M_PI / 180.0;
-    double min_x = 1e6, max_x = -1e6;
-    double min_y = 1e6, max_y = -1e6;
+//   double best_yaw = 0.0;
+//   double min_area = std::numeric_limits<double>::max();
 
-    for (const auto& pt : cropped_cloud->points) {
-      // Translate point to origin
-      double dx = pt.x - ox;
-      double dy = pt.y - oy;
+  
+//   for (int angle_deg = 0; angle_deg < 90; ++angle_deg) {
+//     double angle_rad = angle_deg * M_PI / 180.0;
+//     double min_x = 1e6, max_x = -1e6;
+//     double min_y = 1e6, max_y = -1e6;
+
+//     for (const auto& pt : cropped_cloud->points) {
+//       // Translate point to origin
+//       double dx = pt.x - ox;
+//       double dy = pt.y - oy;
       
-      // Rotate point to test alignment
-      double rx = dx * cos(-angle_rad) - dy * sin(-angle_rad);
-      double ry = dx * sin(-angle_rad) + dy * cos(-angle_rad);
+//       // Rotate point to test alignment
+//       double rx = dx * cos(-angle_rad) - dy * sin(-angle_rad);
+//       double ry = dx * sin(-angle_rad) + dy * cos(-angle_rad);
 
-      if (rx < min_x) min_x = rx;
-      if (rx > max_x) max_x = rx;
-      if (ry < min_y) min_y = ry;
-      if (ry > max_y) max_y = ry;
-    }
+//       if (rx < min_x) min_x = rx;
+//       if (rx > max_x) max_x = rx;
+//       if (ry < min_y) min_y = ry;
+//       if (ry > max_y) max_y = ry;
+//     }
 
-    double area = (max_x - min_x) * (max_y - min_y);
-    if (area < min_area) {
-      min_area = area;
-      best_yaw = angle_rad;
-    }
-  }
+//     double area = (max_x - min_x) * (max_y - min_y);
+//     if (area < min_area) {
+//       min_area = area;
+//       best_yaw = angle_rad;
+//     }
+//   }
 
-  RCLCPP_INFO(l, "Calculated Shape Yaw: %.2f degrees", best_yaw * 180.0 / M_PI);
-  return best_yaw;
-}
+//   RCLCPP_INFO(l, "Calculated Shape Yaw: %.2f degrees", best_yaw * 180.0 / M_PI);
+//   return best_yaw;
+// }
 
 
 
@@ -297,66 +327,89 @@ void cw2::t1_callback(
   RCLCPP_INFO(L, "Shape: %s at (%.4f, %.4f, %.4f) [world]", shape.c_str(), ox, oy, oz);
   RCLCPP_INFO(L, "Basket at (%.4f, %.4f, %.4f) [world]", gx, gy, gz);
 
-  // rotation and offset logicx
-  
-  double shape_yaw = 0.0; 
-  {
-    std::lock_guard<std::mutex> lock(cloud_mutex_);
-    if (!g_cloud_ptr->empty() && !g_input_pc_frame_id_.empty()) {
-      try {
-        // Find how the camera is positioned relative to the robot base
-        geometry_msgs::msg::TransformStamped tf_cam_to_base = 
-          tf_buffer_.lookupTransform("panda_link0", g_input_pc_frame_id_, tf2::TimePointZero);
+  double gx_pick, gy_pick;
+  double gx_drop, gy_drop;
 
-        // Convert the ROS transform to a mathematical matrix (Eigen)
-        Eigen::Affine3f transform = Eigen::Affine3f::Identity();
-        transform.translation() << tf_cam_to_base.transform.translation.x,
-                                   tf_cam_to_base.transform.translation.y,
-                                   tf_cam_to_base.transform.translation.z;
-        Eigen::Quaternionf q(
-          tf_cam_to_base.transform.rotation.w,
-          tf_cam_to_base.transform.rotation.x,
-          tf_cam_to_base.transform.rotation.y,
-          tf_cam_to_base.transform.rotation.z);
-        transform.rotate(q);
-
-        
-        PointCPtr transformed_cloud(new PointC);
-        pcl::transformPointCloud(*g_cloud_ptr, *transformed_cloud, transform);
-
-        
-        shape_yaw = get_shape_yaw(transformed_cloud, ox, oy, oz, L);
-
-      } catch (const tf2::TransformException &ex) {
-        RCLCPP_WARN(L, "TF Exception: Could not align point cloud! Defaulting to 0.0. Error: %s", ex.what());
-      }
-    } else {
-      RCLCPP_WARN(L, "Point cloud or frame ID is empty! Defaulting yaw to 0.0.");
-    }
-  }
-
-  const double arm_offset = 0.08;  // 80mm from centroid
-  double gx_pick = ox;
-  double gy_pick = oy;
-
-  
   if (shape == "nought") {
-    gx_pick -= arm_offset * std::sin(shape_yaw);
-    gy_pick += arm_offset * std::cos(shape_yaw);
-  } else if (shape == "cross") {
-    gx_pick += arm_offset * std::cos(shape_yaw);
-    gy_pick += arm_offset * std::sin(shape_yaw);
+    RCLCPP_INFO(L, "Applying nought offsets");
+    gx_pick = ox;
+    gy_pick = oy - 0.08;
+    gx_drop = gx;
+    gy_drop = gy - 0.05;
+  } else {
+    RCLCPP_INFO(L, "Applying cross offsets");
+    gx_pick = ox - 0.05;
+    gy_pick = oy;
+    gx_drop = gx - 0.02;
+    gy_drop = gy;
   }
 
-  RCLCPP_INFO(L, "Grasp point dynamic offset applied: (%.4f, %.4f) [yaw=%.2f]",
-              gx_pick, gy_pick, shape_yaw);
-
-  // Height calculations
   const double shape_centroid_z = 0.020;           
   const double grasp_l8     = ft2l8(shape_centroid_z + 0.015); 
   const double pre_grasp_l8 = grasp_l8 + 0.085;    
   const double transit_l8   = 0.40;                 
-  const double release_l8   = ft2l8(gz + 0.10);    
+  const double release_l8   = ft2l8(gz + 0.10);  
+
+  // // rotation and offset logicx
+  
+  // double shape_yaw = 0.0; 
+  // {
+  //   std::lock_guard<std::mutex> lock(cloud_mutex_);
+  //   if (!g_cloud_ptr->empty() && !g_input_pc_frame_id_.empty()) {
+  //     try {
+  //       // Find how the camera is positioned relative to the robot base
+  //       geometry_msgs::msg::TransformStamped tf_cam_to_base = 
+  //         tf_buffer_.lookupTransform("panda_link0", g_input_pc_frame_id_, tf2::TimePointZero);
+
+  //       // Convert the ROS transform to a mathematical matrix (Eigen)
+  //       Eigen::Affine3f transform = Eigen::Affine3f::Identity();
+  //       transform.translation() << tf_cam_to_base.transform.translation.x,
+  //                                  tf_cam_to_base.transform.translation.y,
+  //                                  tf_cam_to_base.transform.translation.z;
+  //       Eigen::Quaternionf q(
+  //         tf_cam_to_base.transform.rotation.w,
+  //         tf_cam_to_base.transform.rotation.x,
+  //         tf_cam_to_base.transform.rotation.y,
+  //         tf_cam_to_base.transform.rotation.z);
+  //       transform.rotate(q);
+
+        
+  //       PointCPtr transformed_cloud(new PointC);
+  //       pcl::transformPointCloud(*g_cloud_ptr, *transformed_cloud, transform);
+
+        
+  //       shape_yaw = get_shape_yaw(transformed_cloud, ox, oy, oz, L);
+
+  //     } catch (const tf2::TransformException &ex) {
+  //       RCLCPP_WARN(L, "TF Exception: Could not align point cloud! Defaulting to 0.0. Error: %s", ex.what());
+  //     }
+  //   } else {
+  //     RCLCPP_WARN(L, "Point cloud or frame ID is empty! Defaulting yaw to 0.0.");
+  //   }
+  // }
+
+  // const double arm_offset = 0.08;  // 80mm from centroid
+  // double gx_pick = ox;
+  // double gy_pick = oy;
+
+  
+  // if (shape == "nought") {
+  //   gx_pick -= arm_offset * std::sin(shape_yaw);
+  //   gy_pick += arm_offset * std::cos(shape_yaw);
+  // } else if (shape == "cross") {
+  //   gx_pick += arm_offset * std::cos(shape_yaw);
+  //   gy_pick += arm_offset * std::sin(shape_yaw);
+  // }
+
+  // RCLCPP_INFO(L, "Grasp point dynamic offset applied: (%.4f, %.4f) [yaw=%.2f]",
+  //             gx_pick, gy_pick, shape_yaw);
+
+  // Height calculations
+  // const double shape_centroid_z = 0.020;           
+  // const double grasp_l8     = ft2l8(shape_centroid_z + 0.015); 
+  // const double pre_grasp_l8 = grasp_l8 + 0.085;    
+  // const double transit_l8   = 0.40;                 
+  // const double release_l8   = ft2l8(gz + 0.10);    
 
   RCLCPP_INFO(L, "Heights: grasp_l8=%.4f pre_grasp=%.4f transit=%.4f release=%.4f",
               grasp_l8, pre_grasp_l8, transit_l8, release_l8);
@@ -371,7 +424,7 @@ void cw2::t1_callback(
   go_home(arm_group_, L);
 
   
-  if (!joint_move(arm_group_, td_pose(gx_pick, gy_pick, transit_l8, shape_yaw), L, "Above shape")) {
+  if (!joint_move(arm_group_, td_pose(gx_pick, gy_pick, transit_l8), L, "Above shape")) {
     fail(); return;
   }
 
@@ -379,14 +432,14 @@ void cw2::t1_callback(
   if (!open_gripper(hand_group_, L)) { fail(); return; }
 
   
-  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, pre_grasp_l8, shape_yaw), L, "Pre-grasp")) {
+  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, pre_grasp_l8), L, "Pre-grasp")) {
     fail(); return;
   }
 
   
   arm_group_->setMaxVelocityScalingFactor(0.1);
   arm_group_->setMaxAccelerationScalingFactor(0.1);
-  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, grasp_l8, shape_yaw), L, "Descend")) {
+  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, grasp_l8), L, "Descend")) {
     fail(); return;
   }
 
@@ -396,26 +449,26 @@ void cw2::t1_callback(
   
   arm_group_->setMaxVelocityScalingFactor(0.5);
   arm_group_->setMaxAccelerationScalingFactor(0.5);
-  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, transit_l8, shape_yaw), L, "Lift")) {
+  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, transit_l8), L, "Lift")) {
     fail(); return;
   }
 
   // placing the object
 
   
-  if (!joint_move(arm_group_, td_pose(gx, gy, transit_l8, 0.0), L, "Above basket")) {
+  if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, transit_l8), L, "Above basket")) {
     fail(); return;
   }
 
   
-  if (!cart_move(arm_group_, td_pose(gx, gy, release_l8, 0.0), L, "Lower")) {
+  if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, release_l8), L, "Lower")) {
     fail(); return;
   }
 
   
   if (!open_gripper(hand_group_, L)) { fail(); return; }
 
-  cart_move(arm_group_, td_pose(gx, gy, transit_l8, 0.0), L, "Retreat");
+  cart_move(arm_group_, td_pose(gx_drop, gy_drop, transit_l8), L, "Retreat");
   go_home(arm_group_, L);
   RCLCPP_INFO(L, "=== Task 1 complete ===");
 }
