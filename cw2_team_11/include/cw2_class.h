@@ -254,7 +254,7 @@ public:
   {
     SHAPE_TYPE type;
     SHAPE_SIZE size;
-    //std_msgs::Pose;
+    double yaw;
   };
 
   bool classifyShape(PointCPtr in_cloud_ptr, SHAPE &shape);
