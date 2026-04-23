@@ -19,6 +19,10 @@ solution is contained within the cw2_team_<your_team_number> package */
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/quaternion.hpp>
+#include <tf2/LinearMath/Quaternion.h>
+
 
 #include <pcl_conversions/pcl_conversions.h>
 #include <tf2/exceptions.h>
@@ -35,6 +39,7 @@ solution is contained within the cw2_team_<your_team_number> package */
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl/features/moment_of_inertia_estimation.h>
 #include <pcl/filters/extract_indices.h>
 #include <pcl/features/normal_3d.h>
 #include <pcl/ModelCoefficients.h>
@@ -57,6 +62,35 @@ typedef PointC::Ptr PointCPtr;
 class cw2
 {
 public:
+
+  // TYPE DEFINITIONS
+
+  // struct and enum to define shapes
+
+  enum class SHAPE_TYPE : int
+  {
+    UNKNOWN = -1,
+    NOUGHT = 1,
+    CROSS = 2
+  };
+
+  enum class SHAPE_SIZE : int
+  {
+    UNKNOWN = -1,
+    MM_20 = 20,
+    MM_30 = 30,
+    MM_40 = 40
+  };
+
+  struct SHAPE
+  {
+    SHAPE_TYPE type;
+    SHAPE_SIZE size;
+    double yaw;
+  };
+
+  // FUNCTION DEFINITIONS
+
   explicit cw2(const rclcpp::Node::SharedPtr &node);
 
   void t1_callback(
@@ -70,6 +104,7 @@ public:
     std::shared_ptr<cw2_world_spawner::srv::Task3Service::Response> response);
 
   void cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
+  void rosTopicToCloud(const sensor_msgs::msg::PointCloud2::ConstSharedPtr cloud_input_msg);
 
   void applyVoxelGrid(double leaf_size);
   void applyPassthrough(double pass_min, double pass_max, std::string pass_axis);
@@ -84,15 +119,16 @@ public:
   std::string colorOfPointCloud(PointC &in_cloud_ptr, float threshold);
   void filteringPipeline();
   Eigen::Vector3f toWorldFrame(Eigen::Vector3f local_point);
-  bool moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group, float theta);
+  SHAPE classifyShape(PointC &in_cloud_ptr);
+  bool classifyShape(PointCPtr in_cloud_ptr, SHAPE &shape);
+
 
   // Reusable pick-and-place for any shape size (x = 20, 30, or 40mm)
   bool pick_and_place_shape(double ox, double oy,
                             double bx, double by, double bz,
-                            const std::string &shape_type,
-                            int cell_size_mm);
+                            const SHAPE);
 
-
+  // VARIABLE DEFINITION
 
   rclcpp::Node::SharedPtr node_;
   rclcpp::Service<cw2_world_spawner::srv::Task1Service>::SharedPtr t1_service_;
@@ -115,6 +151,8 @@ public:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster5;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster6;
   std::array<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr, 6> g_pub_clusters;
+
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr g_pub_pose;
 
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
@@ -204,7 +242,7 @@ public:
   std::string pointcloud_topic_;
   bool pointcloud_qos_reliable_ = false;
 
-  // Create an array of all colors
+    // Create an array of all colors
 
   static constexpr size_t num_colors = 5;
   const std::array<std::array<float, 3>, num_colors> colors = {{
@@ -220,28 +258,7 @@ public:
 
   const std::string no_color = "none";
 
-  // struct and enum to define shapes
 
-  enum class SHAPE_TYPE
-  {
-    NOUGHT,
-    CROSS
-  };
-
-  enum class SHAPE_SIZE
-  {
-    MM_20,
-    MM_30,
-    MM_40
-  };
-
-  struct SHAPE
-  {
-    SHAPE_TYPE type;
-    SHAPE_SIZE size;
-  };
-
-  SHAPE classifyShape(PointC &in_cloud_ptr);
 
 
 };

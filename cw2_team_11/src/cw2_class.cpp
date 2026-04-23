@@ -159,8 +159,20 @@ cw2::cw2(const rclcpp::Node::SharedPtr &node)
 : node_(node),
   tf_buffer_(node->get_clock()),
   tf_listener_(tf_buffer_),
-  g_cloud_ptr(new PointC)
 {
+
+  g_cloud_ptr = std::make_shared<PointC>();
+  g_cloud_filtered = std::make_shared<PointC>();
+  g_cloud_plane = std::make_shared<PointC>();
+  g_cloud_segmented_plane = std::make_shared<PointC>();
+  g_cloud_cluster = std::make_shared<PointC>();
+  g_tree_ptr = std::make_shared<pcl::search::KdTree<PointT>>();
+  g_tree_ptr_euclidean = std::make_shared<pcl::search::KdTree<PointT>>();
+  g_cloud_normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
+  g_cloud_segmented_normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
+  g_inliers_plane = std::make_shared<pcl::PointIndices>();
+  g_coeff_plane = std::make_shared<pcl::ModelCoefficients>();
+
   t1_service_ = node_->create_service<cw2_world_spawner::srv::Task1Service>(
     "/task1_start",
     std::bind(&cw2::t1_callback, this, std::placeholders::_1, std::placeholders::_2));
@@ -186,6 +198,23 @@ cw2::cw2(const rclcpp::Node::SharedPtr &node)
     pointcloud_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile();
   }
 
+  //debug publishers
+  g_pub_cloud = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud", 1);
+  g_pub_passthrough = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_passthrough", 1);
+  g_pub_outlier = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_outlier", 1);
+  g_pub_plane = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_plane", 1);
+  g_pub_cluster1 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster1", 1);
+  g_pub_cluster2 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster2", 1);
+  g_pub_cluster3 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster3", 1);
+  g_pub_cluster4 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster4", 1);
+  g_pub_cluster5 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster5", 1);
+  g_pub_cluster6 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw2_cloud/cloud_cluster6", 1);
+
+  g_pub_pose = node_->create_publisher<geometry_msgs::msg::PoseStamped>("/cw2_pose", 1);
+
+  g_pub_clusters = {g_pub_cluster1, g_pub_cluster2, g_pub_cluster3, g_pub_cluster4, g_pub_cluster5, g_pub_cluster6};
+
+
   color_cloud_sub_ = node_->create_subscription<sensor_msgs::msg::PointCloud2>(
     pointcloud_topic_,
     pointcloud_qos,
@@ -208,16 +237,19 @@ cw2::cw2(const rclcpp::Node::SharedPtr &node)
 
 void cw2::cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg)
 {
-  pcl::PCLPointCloud2 pcl_cloud;
-  pcl_conversions::toPCL(*msg, pcl_cloud);
+  // pcl::PCLPointCloud2 pcl_cloud;
+  // pcl_conversions::toPCL(*msg, pcl_cloud);
 
-  PointCPtr latest_cloud(new PointC);
-  pcl::fromPCLPointCloud2(pcl_cloud, *latest_cloud);
+  // PointCPtr latest_cloud(new PointC);
+  // pcl::fromPCLPointCloud2(pcl_cloud, *latest_cloud);
 
   std::lock_guard<std::mutex> lock(cloud_mutex_);
-  g_input_pc_frame_id_ = msg->header.frame_id;
-  g_cloud_ptr = std::move(latest_cloud);
-  ++g_cloud_sequence_;
+  // g_input_pc_frame_id_ = msg->header.frame_id;
+  // g_cloud_ptr = std::move(latest_cloud);
+  // ++g_cloud_sequence_;
+
+  latest_cloud_msg_ = msg;
+
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -228,11 +260,10 @@ void cw2::cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg
 bool cw2::pick_and_place_shape(
   double ox, double oy,
   double bx, double by, double bz,
-  const std::string &shape_type,
-  int cell_size_mm)
+  const cw2::SHAPE &shape)
 {
   auto L = node_->get_logger();
-  double cell_m = cell_size_mm / 1000.0;
+  double cell_m = static_cast<float>(shape.size) / 1000.0;
 
   // Scale grasp offset with cell size.
   // nought: 2.0 * cell = exact center of the side wall. 
@@ -240,7 +271,7 @@ bool cw2::pick_and_place_shape(
   //   x=40 → 80mm, x=30 → 60mm, x=20 → 40mm (all centered on wall)
   // cross:  1.0 * cell = first arm cell from center (secure, away from intersection)
   double px = ox, py = oy;
-  if (shape_type == "nought") {
+  if (shape.type == cw2::SHAPE_TYPE::NOUGHT) {
     py = oy - 2.0 * cell_m;
   } else {
     px = ox + 1.0 * cell_m;
@@ -248,14 +279,14 @@ bool cw2::pick_and_place_shape(
 
   // Drop offsets (small, just to clear basket rim)
   double dx = bx, dy = by;
-  if (shape_type == "nought") {
+  if (shape.type == cw2::SHAPE_TYPE::NOUGHT) {
     dy = by - 1.5 * cell_m;
   } else {
     dx = bx + 0.5 * cell_m;
   }
 
   RCLCPP_INFO(L, "pick_and_place: shape=%s size=%dmm grasp=(%.3f,%.3f) drop=(%.3f,%.3f)",
-              shape_type.c_str(), cell_size_mm, px, py, dx, dy);
+              static_cast<int>(shape.type), static_cast<int>(shape.size), px, py, dx, dy);
 
   // Heights — shape is ALWAYS 40mm tall regardless of cell size
   double grip_z   = 0.020 + 0.15;
@@ -526,6 +557,10 @@ void cw2::t2_callback(
   auto L = node_->get_logger();
   RCLCPP_INFO(L, "Starting Task 2");
 
+  (void)request;
+  response->mystery_object_num = -1;
+
+  
   static const std::string planning_group = "panda_arm";
   moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
 
@@ -566,6 +601,9 @@ void cw2::t2_callback(
   move_group2.execute(plan1);
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
+
+  cw2::SHAPE reference_shape_1 = findAndClassifyShape();
+
   
   //Reference object 2
   target_pose.position.x = request->ref_object_points[1].point.x;
@@ -579,6 +617,9 @@ void cw2::t2_callback(
   move_group2.execute(plan2);
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
+  cw2::SHAPE reference_shape_2 = findAndClassifyShape();
+
+
   //Mystery object
   target_pose.position.x = request->mystery_object_point.point.x;
   target_pose.position.y = request->mystery_object_point.point.y;
@@ -589,6 +630,42 @@ void cw2::t2_callback(
 
   success = (move_group2.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS);
   move_group2.execute(plan3);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+
+  cw2::SHAPE mystery_shape = findAndClassifyShape();
+
+
+  if (reference_shape_1.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_1.type == mystery_shape.type)
+  {
+    response->mystery_object_num = 1;
+    RCLCPP_INFO(node_->get_logger(), "Mystery shape matches Reference 1!");
+  }
+  else if (reference_shape_2.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_2.type == mystery_shape.type)
+  {
+    response->mystery_object_num = 2;
+    RCLCPP_INFO(node_->get_logger(), "Mystery shape matches Reference 2!");
+
+  }
+  else
+  {
+    /// something didn't work :(
+    if (reference_shape_1.type == cw2::SHAPE_TYPE::UNKNOWN)
+    {
+      RCLCPP_INFO(node_->get_logger(), "Reference 1 is Unknown");
+    }
+
+    if (reference_shape_2.type == cw2::SHAPE_TYPE::UNKNOWN)
+    {
+      RCLCPP_INFO(node_->get_logger(), "Reference 2 is Unknown");
+    }
+
+    if (mystery_shape.type == cw2::SHAPE_TYPE::UNKNOWN)
+    {
+      RCLCPP_INFO(node_->get_logger(), "Mystery shape is Unknown");
+    }
+  }
+  
   
 }
 
@@ -731,6 +808,23 @@ success = (move_group3.plan(plan8) == moveit::core::MoveItErrorCode::SUCCESS);
 move_group3.execute(plan8);
 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 }
+
+//PCL FUNCTIONS
+
+void cw2::rosTopicToCloud(const sensor_msgs::msg::PointCloud2::ConstSharedPtr cloud_input_msg)
+{
+
+  std::lock_guard<std::mutex> lock(cloud_mutex_);
+
+  g_input_pc_frame_id = cloud_input_msg->header.frame_id;
+
+  pcl::fromROSMsg(*cloud_input_msg, *g_cloud_ptr);
+
+  *g_cloud_filtered = *g_cloud_ptr;
+
+  RCLCPP_INFO_STREAM(node_->get_logger(), "saved cloud");
+}
+
 void cw2::applyVoxelGrid(double g_leaf_size)
 {
   
@@ -881,17 +975,216 @@ Eigen::Vector3f cw2::getCentroid(PointC &in_cloud_ptr)
   return centroid.head<3>();  // drops the homogeneous w component
 }
 
-cw2::SHAPE cw2::classifyShape(PointC &in_cloud_ptr)
+bool cw2::classifyShape(PointCPtr in_cloud_ptr, cw2::SHAPE &shape)
 {
 
-  //Discrepancy here.
+  g_inertia_estimator.setInputCloud(in_cloud_ptr);
+  g_inertia_estimator.compute();
+
+  PointT min_OBB, max_OBB, position_OBB;
+  Eigen::Matrix3f rotation_OBB;
+  float major_eigen, middle_eigen, minor_eigen;
+
+  g_inertia_estimator.getOBB(min_OBB, max_OBB, position_OBB, rotation_OBB);
+  g_inertia_estimator.getEigenValues(major_eigen, middle_eigen, minor_eigen);
+
+  // Print eigenvalues (major, middle, minor)
+  RCLCPP_INFO(node_->get_logger(), "Eigenvalues: major=%.5f middle=%.5f minor=%.5f", major_eigen, middle_eigen, minor_eigen);
+
+// // Print OBB rotation matrix
+//   RCLCPP_INFO(node_->get_logger(), "OBB rotation matrix: [%.3f %.3f %.3f; %.3f %.3f %.3f; %.3f %.3f %.3f]", 
+//     rotation_OBB(0,0), rotation_OBB(0,1), rotation_OBB(0,2),
+//     rotation_OBB(1,0), rotation_OBB(1,1), rotation_OBB(1,2),
+//     rotation_OBB(2,0), rotation_OBB(2,1), rotation_OBB(2,2));
+
+  RCLCPP_INFO(node_->get_logger(), "Delta: x=%.1f y=%.1f z=%.1f", 1000*abs(max_OBB.x - min_OBB.x), 1000*abs(max_OBB.y - min_OBB.y), 1000*abs(max_OBB.z - min_OBB.z));
+
+  //sanity checks
+  //if either the major or middle eigen is zero, skip this cluster
+  if (major_eigen < 0.0001 || middle_eigen < 0.0001)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Zero Major/Middle eigen, exiting");
+    return false;
+  }
+
+  //if major != middle eigen. Have a tolerance of 10%. 
+  //removes clusters that are not squares
+  if (abs((major_eigen/middle_eigen) - 1) > 0.1)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Nonsquare eigen, exiting");
+    return false;
+  }
+
+  int num_points_close = 0;
+  const float close_point_threshold = 0.020f;
+
+  Eigen::Vector3f centroid_vec(position_OBB.x, position_OBB.y, position_OBB.z);
+  double sum_dist = 0.0;
+  double closest_distance = std::numeric_limits<float>::max();
+  Eigen::Vector3f closest_point;
+  for (const auto& pt : in_cloud_ptr->points) {
+    Eigen::Vector3f pt_vec(pt.x, pt.y, pt.z);
+    double dist = (pt_vec - centroid_vec).norm();
+    sum_dist += dist;
+    if (dist < close_point_threshold)
+    {
+      num_points_close++;
+    }
+    if (dist < closest_distance)
+    {
+      closest_distance = dist;
+      closest_point = (pt_vec - centroid_vec);
+    }
+
+  }
+  double avg_dist = (in_cloud_ptr->size() > 0) ? (sum_dist / in_cloud_ptr->size()) : 0.0;
 
 
-  cw2::SHAPE shape;
-  shape.type = cw2::SHAPE_TYPE::CROSS;
-  shape.size = cw2::SHAPE_SIZE::MM_40;
+  //SHAPE CLASSIFICATION
 
-  return shape;
+  if (num_points_close > 500)
+  {
+    shape.type = cw2::SHAPE_TYPE::CROSS;
+    RCLCPP_INFO(node_->get_logger(), "%d central points, assigned as Cross", num_points_close);
+
+  }
+  else
+  {
+    shape.type = cw2::SHAPE_TYPE::NOUGHT;
+    RCLCPP_INFO(node_->get_logger(), "%d central points, assigned as Nought", num_points_close);
+  }
+
+
+  //SIZE CLASSIFICATION
+
+  float delta = 1000*(abs(max_OBB.x - min_OBB.x) + abs(max_OBB.y - min_OBB.y))/2; //convert from m to mm
+
+  if (shape.type == cw2::SHAPE_TYPE::NOUGHT)
+  {
+    if (avg_dist >= 0.035 && avg_dist < 0.055)
+    {
+      shape.size = cw2::SHAPE_SIZE::MM_20;
+      RCLCPP_INFO(node_->get_logger(), "Average Distance %.5f, assigned as 20mm", avg_dist);
+    }
+    else if (avg_dist >= 0.055 && avg_dist < 0.075)
+    {
+      shape.size = cw2::SHAPE_SIZE::MM_30;
+      RCLCPP_INFO(node_->get_logger(), "Average Distance %.5f, assigned as 30mm", avg_dist);
+    }
+    else if (avg_dist >= 0.075 && avg_dist < 0.095)
+    {
+      shape.size = cw2::SHAPE_SIZE::MM_40;
+      RCLCPP_INFO(node_->get_logger(), "Average Distance %.5f, assigned as 40mm", avg_dist);
+    }
+    else
+    {
+      RCLCPP_INFO(node_->get_logger(), "Average distance %.5f too big, exiting", avg_dist);
+      return false;
+    }
+
+  }
+  else
+  {
+    
+    if (delta > 75 && delta < 125)
+    {
+      shape.size = cw2::SHAPE_SIZE::MM_20;
+      
+      RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 20mm", delta);
+    }
+    else if (delta >= 125 && delta < 175)
+    {
+      shape.size = cw2::SHAPE_SIZE::MM_30;
+      RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 30mm", delta);
+    }
+    else if (delta >= 175 && delta < 300)
+    {
+      shape.size = cw2::SHAPE_SIZE::MM_40;
+      RCLCPP_INFO(node_->get_logger(), "Delta x %.3f, assigned as 40mm", delta);
+    }
+    else
+    {
+      RCLCPP_INFO(node_->get_logger(), "Delta x %.3f too big, exiting", delta);
+      return false;
+    }
+  }
+  
+  //YAW CLASSIFICATION
+
+  double yaw;
+  if (shape.type == cw2::SHAPE_TYPE::NOUGHT)
+  { 
+    yaw = atan2(closest_point.y(), closest_point.x());
+  }
+  else
+  {
+    yaw = atan2(rotation_OBB(1, 0), rotation_OBB(0, 0));
+  }
+
+  // Print yaw
+  RCLCPP_INFO(node_->get_logger(), "Yaw: %.3f", 180*yaw/M_PI);
+
+  double adjusted_yaw = (int)(90 - (180*yaw/M_PI))%90;
+
+  if (adjusted_yaw < 0)
+  {
+    adjusted_yaw = adjusted_yaw + 90;
+  }
+
+  RCLCPP_INFO(node_->get_logger(), "adjusted yaw: %.3f", adjusted_yaw);
+
+  shape.yaw = adjusted_yaw;
+
+  // DEBUG ONLY BELOW
+  tf2::Quaternion q;
+  q.setRPY(0, 0, adjusted_yaw);
+
+  geometry_msgs::msg::Point p;
+  p.x = position_OBB.x;
+  p.y = position_OBB.y;
+  p.z = position_OBB.z;
+
+  geometry_msgs::msg::PoseStamped pose;
+  pose.pose.orientation = tf2::toMsg(q);
+  pose.pose.position = p;
+
+  pose.header.frame_id = g_input_pc_frame_id;
+  pose.header.stamp = latest_cloud_msg_->header.stamp;
+
+  if (g_pub_pose)
+  {
+    g_pub_pose->publish(pose);
+  }
+
+  geometry_msgs::msg::PolygonStamped poly;
+  poly.header.frame_id = g_input_pc_frame_id;
+  poly.header.stamp = latest_cloud_msg_->header.stamp;
+
+  // Create square corners from min_OBB and max_OBB
+  std::vector<Eigen::Vector3f> corners(4);
+  // min_OBB and max_OBB are in the OBB-aligned frame, so corners are:
+  // (min.x, min.y), (max.x, min.y), (max.x, max.y), (min.x, max.y) at z = min_OBB.z (or max_OBB.z if box is not flat)
+  float z_val = (fabs(max_OBB.z - min_OBB.z) < 1e-4) ? min_OBB.z : (min_OBB.z + max_OBB.z) / 2.0f;
+  corners[0] = Eigen::Vector3f(min_OBB.x, min_OBB.y, z_val);
+  corners[1] = Eigen::Vector3f(max_OBB.x, min_OBB.y, z_val);
+  corners[2] = Eigen::Vector3f(max_OBB.x, max_OBB.y, z_val);
+  corners[3] = Eigen::Vector3f(min_OBB.x, max_OBB.y, z_val);
+
+  // Transform corners to world frame if needed (optional, here we keep in input frame)
+  for (int i = 0; i < 4; ++i) {
+    geometry_msgs::msg::Point32 pt32;
+    pt32.x = corners[i].x();
+    pt32.y = corners[i].y();
+    pt32.z = corners[i].z();
+    poly.polygon.points.push_back(pt32);
+  }
+
+  // Publish polygon for visualization
+  if (g_pub_poly) {
+    g_pub_poly->publish(poly);
+  }
+
+  return true;
 
 }
 
@@ -992,12 +1285,48 @@ std::string cw2::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
 
 void cw2::filteringPipeline()
 {
-  // rosTopicToCloud(latest_cloud_msg_);
+  rosTopicToCloud(latest_cloud_msg_);
   // applyVoxelGrid(0.05);
-  applyPassthrough(-0.31, 0.18, "y");
+  //applyPassthrough(-0.31, 0.18, "y");
   applyOutlierRemoval(20, 1.0);
   findNormals(50);
-  segmentationPipeline(0.1, 100, 0.03);
+  segmentationPipeline(0.1, 100, 0.01);
+}
+
+cw2::SHAPE cw2::findAndClassifyShape()
+{
+
+  filteringPipeline();
+    
+  PointCPtr output_cloud(new PointC);
+
+  double plane_z = getCentroid(*g_cloud_plane).z();
+
+  g_pt.setInputCloud(g_cloud_segmented_plane);
+  g_pt.setFilterFieldName("z");
+  g_pt.setFilterLimits(0, plane_z);
+  g_pt.setNegative(false);
+  g_pt.filter(*output_cloud);
+  g_cloud_segmented_plane.swap(output_cloud);
+
+
+  RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
+
+  std::vector<PointCPtr> shapes = extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
+
+  cw2::SHAPE ref_shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, 0};
+  for (size_t i = 0; i < shapes.size(); i++)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+    
+    if(classifyShape(shapes[i], ref_shape))
+    {
+      break;
+    }
+    colorOfPointCloud(*shapes[i], 0.3);
+  }
+
+  return ref_shape;
 }
 
 //convert local coords to world coords
