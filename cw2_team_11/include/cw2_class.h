@@ -86,6 +86,7 @@ public:
   {
     SHAPE_TYPE type;
     SHAPE_SIZE size;
+    Eigen::Vector3f centroid;
     double yaw;
   };
 
@@ -107,7 +108,7 @@ public:
   void rosTopicToCloud(const sensor_msgs::msg::PointCloud2::ConstSharedPtr cloud_input_msg);
 
   void applyVoxelGrid(double leaf_size);
-  void applyPassthrough(double pass_min, double pass_max, std::string pass_axis);
+  void applyPassthrough(double pass_min, double pass_max, std::string pass_axis, PointCPtr &in_cloud_ptr);
   void applyOutlierRemoval(int mean_k, double stddev);
   void findNormals(int normal_k);
   void segmentationPipeline(double normal_dist_weight, int max_iterations, double distance);
@@ -115,12 +116,13 @@ public:
   void pubFilteredPCMsg(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub, PointC &pc, const std_msgs::msg::Header &header);
   void processCloud();
-  Eigen::Vector3f getCentroid(PointC &in_cloud_ptr);
+  Eigen::Vector3f getCentroid(PointCPtr &in_cloud_ptr);
   std::string colorOfPointCloud(PointC &in_cloud_ptr, float threshold);
   void filteringPipeline();
   Eigen::Vector3f toWorldFrame(Eigen::Vector3f local_point);
-  SHAPE classifyShape(PointC &in_cloud_ptr);
-  bool classifyShape(PointCPtr in_cloud_ptr, SHAPE &shape);
+  SHAPE classifyShape(PointCPtr &in_cloud_ptr);
+  std::vector<PointCPtr> shapes cw2::findClusters();
+
 
 
   // Reusable pick-and-place for any shape size (x = 20, 30, or 40mm)

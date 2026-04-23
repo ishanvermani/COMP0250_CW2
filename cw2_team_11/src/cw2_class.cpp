@@ -490,6 +490,28 @@ void cw2::t1_callback(
 
   if (!open_gripper(hand_group_, L)) { fail(); return; }
 
+  // Determine shape yaw
+
+  std::vector<PointCPtr> clusters = findClusters();
+
+  cw2::SHAPE t1_shape;
+  
+  for (size_t i = 0; i < clusters.size(); i++)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+
+    t1_shape = classifyShape(shapes[i]);
+    
+    if(cluster_shape.type == cw2::SHAPE_TYPE::UNKNOWN || cluster_shape.size == cw2::SHAPE_SIZE::UNKNOWN)
+    {
+      continue;
+    }
+  }
+
+  //
+  // USE t1_shape.yaw FOR YAW!!
+  //
+
   // Move 2
   RCLCPP_INFO(L, "Move B: Descending to grip");
   arm_group_->setMaxVelocityScalingFactor(0.1);
@@ -560,6 +582,11 @@ void cw2::t2_callback(
   (void)request;
   response->mystery_object_num = -1;
 
+  cw2::SHAPE reference_shape_1 = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
+  cw2::SHAPE reference_shape_2 = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
+  cw2::SHAPE myster_shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
+  std::vector<PointCPtr> clusters;
+
   
   static const std::string planning_group = "panda_arm";
   moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
@@ -597,12 +624,33 @@ void cw2::t2_callback(
   move_group2.setPoseTarget(target_pose);
   moveit::planning_interface::MoveGroupInterface::Plan plan1;
 
-  bool success = (move_group2.plan(plan1) == moveit::core::MoveItErrorCode::SUCCESS);
-  move_group2.execute(plan1);
-  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  if(move_group2.plan(plan1) == moveit::core::MoveItErrorCode::SUCCESS)
+  {
+    move_group2.execute(plan1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
 
-  cw2::SHAPE reference_shape_1 = findAndClassifyShape();
+    clusters = findClusters();
+    
+    for (size_t i = 0; i < clusters.size(); i++)
+    {
+      RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+
+      reference_shape_1 = classifyShape(clusters[i]);
+      
+      if (reference_shape_1.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_1.size != cw2::SHAPE_SIZE::UNKNOWN) 
+      {
+        break; 
+      }
+    }
+
+  }
+  else
+  {
+    RCLCPP_WARN(L, "Error moving to reference shape 1");
+    return;
+  }
+  
 
   
   //Reference object 2
@@ -613,11 +661,32 @@ void cw2::t2_callback(
   move_group2.setPoseTarget(target_pose);
   moveit::planning_interface::MoveGroupInterface::Plan plan2;
 
-  success = (move_group2.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS);
-  move_group2.execute(plan2);
-  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  if(move_group2.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS)
+  {
+    move_group2.execute(plan2);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-  cw2::SHAPE reference_shape_2 = findAndClassifyShape();
+
+    clusters = findClusters();
+    
+    for (size_t i = 0; i < clusters.size(); i++)
+    {
+      RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+
+      reference_shape_2 = classifyShape(clusters[i]);
+      
+      if (reference_shape_2.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_2.size != cw2::SHAPE_SIZE::UNKNOWN) 
+      {
+        break; 
+      }
+    }
+
+  }
+  else
+  {
+    RCLCPP_WARN(L, "Error moving to reference shape 2");
+    return;
+  }
 
 
   //Mystery object
@@ -628,12 +697,32 @@ void cw2::t2_callback(
   move_group2.setPoseTarget(target_pose);
   moveit::planning_interface::MoveGroupInterface::Plan plan3;
 
-  success = (move_group2.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS);
-  move_group2.execute(plan3);
-  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  if(move_group2.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS)
+  {
+    move_group2.execute(plan3);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
 
-  cw2::SHAPE mystery_shape = findAndClassifyShape();
+    clusters = findClusters();
+    
+    for (size_t i = 0; i < clusters.size(); i++)
+    {
+      RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+
+      mystery_shape = classifyShape(clusters[i]);
+      
+      if (mystery_shape.type != cw2::SHAPE_TYPE::UNKNOWN && mystery_shape.size != cw2::SHAPE_SIZE::UNKNOWN) 
+      {
+        break; 
+      }
+    }
+
+  }
+  else
+  {
+    RCLCPP_WARN(L, "Error moving to mystery shape");
+    return;
+  }
 
 
   if (reference_shape_1.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_1.type == mystery_shape.type)
@@ -706,107 +795,86 @@ void cw2::t3_callback(
   target_pose.orientation.z = z;
   target_pose.orientation.w = w; 
 
-//Move 1
 
-target_pose.position.x = -0.45;
-target_pose.position.y = 0.35;
-target_pose.position.z = 0.65;
+  std::array<std::array<float, 3>, 8> target_poses = {{
+    {-0.45, 0.35, 0.65},
+    {0.00, 0.35, 0.65},
+    {0.45, 0.35, 0.65},
+    {0.45, 0.00, 0.65},
+    {0.45, -0.35, 0.65},
+    {0.00, -0.35, 0.65},
+    {-0.45, -0.35, 0.65},
+    {-0.45, 0.00, 0.65},
 
-move_group3.setPoseTarget(target_pose);
-moveit::planning_interface::MoveGroupInterface::Plan plan1;
+  }}
+  
+  std::vector<PointCPtr> clusters;
 
-bool success = (move_group3.plan(plan1) == moveit::core::MoveItErrorCode::SUCCESS);
-move_group3.execute(plan1);
-std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  std::vector<cw2::SHAPE> found_shapes;
+  std::vector<Eigen::Vector3f> obstacle_locations;
+  Eigen::Vector3f basket_location;
 
-//Move 1.2
-target_pose.position.x = 0;
-target_pose.position.y = 0.35;
-target_pose.position.z = 0.65;
+  for (const auto& pose : target_poses)
+  {
+    target_pose.x = pose[0];
+    target_pose.y = pose[1];
+    target_pose.z = pose[2];
 
-move_group3.setPoseTarget(target_pose);
-moveit::planning_interface::MoveGroupInterface::Plan plan2;
+    move_group3.setPoseTarget(target_pose);
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    if(move_group3.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS)
+    {
+      move_group3.execute(plan);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-success = (move_group3.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS);
-move_group3.execute(plan2);
-std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+      clusters = findClusters();
 
-//Move 2
-target_pose.position.x = 0.45;
-target_pose.position.y = 0.35;
-target_pose.position.z = 0.65;
+      for (size_t i = 0; i < clusters.size(); i++)
+      {
+        RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
 
-move_group3.setPoseTarget(target_pose);
-moveit::planning_interface::MoveGroupInterface::Plan plan3;
+        std::string color = colorOfPointCloud(*clusters[i], 0.3);
 
-success = (move_group3.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS);
-move_group3.execute(plan3);
-std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        if (color == 'black')
+        {
+          obstacle_locations.push_back(toWorldFrame(getCentroid(*clusters[i])));
+        }
+        else if (color == 'brown')
+        {
+          basked_location = toWorldFrame(getCentroid(*clusters[i]));
+        }
+        else
+        {
 
-//Move 2.2
+          cw2::SHAPE shape = classifyShape(clusters[i]);
 
-target_pose.position.x = 0.45;
-target_pose.position.y = 0;
-target_pose.position.z = 0.65;
+          if (shape.type != cw2::SHAPE_TYPE::UNKNOWN && shape.size != cw2::SHAPE_SIZE::UNKNOWN) 
+          {
+            found_shapes.push_back(shape);
+            break; 
+          }
+          
+        }
+      }
 
-move_group3.setPoseTarget(target_pose);
-moveit::planning_interface::MoveGroupInterface::Plan plan4;
+    }
+    else
+    {
+      RCLCPP_WARN(L, "Error During Motion Planning of pose {%.2f, %.2f, %.2f}", pose[0], pose[1], pose[2]);
+    }
 
-success = (move_group3.plan(plan4) == moveit::core::MoveItErrorCode::SUCCESS);
-move_group3.execute(plan4);
-std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  }
 
-//Move 3
 
-target_pose.position.x = 0.45;
-target_pose.position.y = -0.35;
-target_pose.position.z = 0.65;
+  // TO DO
+  // COUNT NUM SHAPES
+  // FIND MOST COMMON SHAPE
+  // RETURN TO RESPONE
+  //PICK UP SHAPES
 
-move_group3.setPoseTarget(target_pose);
-moveit::planning_interface::MoveGroupInterface::Plan plan5;
+  // FOR TESTING, CAN USE found_shapes[0] in pick and place situations. 
+  // Basket location may have to be hardcoded if detection is weak. 
 
-success = (move_group3.plan(plan5) == moveit::core::MoveItErrorCode::SUCCESS);
-move_group3.execute(plan5);
-std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-//Move 3.2
-
-target_pose.position.x = 0;
-target_pose.position.y = -0.35;
-target_pose.position.z = 0.65;
-
-move_group3.setPoseTarget(target_pose);
-moveit::planning_interface::MoveGroupInterface::Plan plan6;
-
-success = (move_group3.plan(plan6) == moveit::core::MoveItErrorCode::SUCCESS);
-move_group3.execute(plan6);
-std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-//Move 4
-
-target_pose.position.x = -0.45;
-target_pose.position.y = -0.35;
-target_pose.position.z = 0.65;
-
-move_group3.setPoseTarget(target_pose);
-moveit::planning_interface::MoveGroupInterface::Plan plan7;
-
-success = (move_group3.plan(plan7) == moveit::core::MoveItErrorCode::SUCCESS);
-move_group3.execute(plan7);
-std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-//Move 4.2
-
-target_pose.position.x = -0.45;
-target_pose.position.y = 0;
-target_pose.position.z = 0.65;
-
-move_group3.setPoseTarget(target_pose);
-moveit::planning_interface::MoveGroupInterface::Plan plan8;
-
-success = (move_group3.plan(plan8) == moveit::core::MoveItErrorCode::SUCCESS);
-move_group3.execute(plan8);
-std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 }
 
 //PCL FUNCTIONS
@@ -838,16 +906,16 @@ void cw2::applyVoxelGrid(double g_leaf_size)
 
 }
 
-void cw2::applyPassthrough(double g_pass_min, double g_pass_max, std::string g_pass_axis)
+void cw2::applyPassthrough(double g_pass_min, double g_pass_max, std::string g_pass_axis, PointCPtr &in_cloud_ptr)
 {
   
   PointCPtr output_cloud(new PointC);
 
-  g_pt.setInputCloud(g_cloud_filtered);
+  g_pt.setInputCloud(in_cloud_ptr);
   g_pt.setFilterFieldName(g_pass_axis);
   g_pt.setFilterLimits(g_pass_min, g_pass_max);
   g_pt.filter(*output_cloud);
-  g_cloud_filtered.swap(output_cloud);
+  in_cloud_ptr.swap(output_cloud);
 
 
 }
@@ -966,17 +1034,19 @@ std::vector<PointCPtr> cw2::extractEuclideanClusters(double clusterTolerance, in
 }
 
 
-Eigen::Vector3f cw2::getCentroid(PointC &in_cloud_ptr)
+Eigen::Vector3f cw2::getCentroid(PointCPtr &in_cloud_ptr)
 {
   
   Eigen::Vector4f centroid;
-  pcl::compute3DCentroid(in_cloud_ptr, centroid);
+  pcl::compute3DCentroid(*in_cloud_ptr, centroid);
 
   return centroid.head<3>();  // drops the homogeneous w component
 }
 
-bool cw2::classifyShape(PointCPtr in_cloud_ptr, cw2::SHAPE &shape)
+cw2::SHAPE cw2::classifyShape(PointCPtr in_cloud_ptr)
 {
+
+  cw2::SHAPE shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
 
   g_inertia_estimator.setInputCloud(in_cloud_ptr);
   g_inertia_estimator.compute();
@@ -991,12 +1061,6 @@ bool cw2::classifyShape(PointCPtr in_cloud_ptr, cw2::SHAPE &shape)
   // Print eigenvalues (major, middle, minor)
   RCLCPP_INFO(node_->get_logger(), "Eigenvalues: major=%.5f middle=%.5f minor=%.5f", major_eigen, middle_eigen, minor_eigen);
 
-// // Print OBB rotation matrix
-//   RCLCPP_INFO(node_->get_logger(), "OBB rotation matrix: [%.3f %.3f %.3f; %.3f %.3f %.3f; %.3f %.3f %.3f]", 
-//     rotation_OBB(0,0), rotation_OBB(0,1), rotation_OBB(0,2),
-//     rotation_OBB(1,0), rotation_OBB(1,1), rotation_OBB(1,2),
-//     rotation_OBB(2,0), rotation_OBB(2,1), rotation_OBB(2,2));
-
   RCLCPP_INFO(node_->get_logger(), "Delta: x=%.1f y=%.1f z=%.1f", 1000*abs(max_OBB.x - min_OBB.x), 1000*abs(max_OBB.y - min_OBB.y), 1000*abs(max_OBB.z - min_OBB.z));
 
   //sanity checks
@@ -1004,7 +1068,7 @@ bool cw2::classifyShape(PointCPtr in_cloud_ptr, cw2::SHAPE &shape)
   if (major_eigen < 0.0001 || middle_eigen < 0.0001)
   {
     RCLCPP_INFO(node_->get_logger(), "Zero Major/Middle eigen, exiting");
-    return false;
+    return shape;
   }
 
   //if major != middle eigen. Have a tolerance of 10%. 
@@ -1012,7 +1076,7 @@ bool cw2::classifyShape(PointCPtr in_cloud_ptr, cw2::SHAPE &shape)
   if (abs((major_eigen/middle_eigen) - 1) > 0.1)
   {
     RCLCPP_INFO(node_->get_logger(), "Nonsquare eigen, exiting");
-    return false;
+    return shape;
   }
 
   int num_points_close = 0;
@@ -1108,6 +1172,10 @@ bool cw2::classifyShape(PointCPtr in_cloud_ptr, cw2::SHAPE &shape)
       return false;
     }
   }
+
+  // CENTROID CLASSIFICATION, world frame
+
+  shape.centroid = toWorldFrame(getCentroid(in_cloud_ptr));
   
   //YAW CLASSIFICATION
 
@@ -1184,7 +1252,7 @@ bool cw2::classifyShape(PointCPtr in_cloud_ptr, cw2::SHAPE &shape)
     g_pub_poly->publish(poly);
   }
 
-  return true;
+  return shape;
 
 }
 
@@ -1217,7 +1285,7 @@ void cw2::processCloud()
   header.stamp = latest_cloud_msg_->header.stamp;
 
   pubFilteredPCMsg(g_pub_cloud, *g_cloud_filtered, header);
-  applyPassthrough(pcl_pass_min_, pcl_pass_max_, pcl_pass_axis_);
+  applyPassthrough(pcl_pass_min_, pcl_pass_max_, pcl_pass_axis_, g_cloud_filtered);
   pubFilteredPCMsg(g_pub_passthrough, *g_cloud_filtered, header);
   applyOutlierRemoval(pcl_outlier_mean_k_, pcl_outlier_stddev_);
   pubFilteredPCMsg(g_pub_outlier, *g_cloud_filtered, header);
@@ -1293,40 +1361,21 @@ void cw2::filteringPipeline()
   segmentationPipeline(0.1, 100, 0.01);
 }
 
-cw2::SHAPE cw2::findAndClassifyShape()
+std::vector<PointCPtr> shapes cw2::findClusters()
 {
 
+  //apply outlier detection, remove plane
   filteringPipeline();
-    
-  PointCPtr output_cloud(new PointC);
-
+  
   double plane_z = getCentroid(*g_cloud_plane).z();
+  //remove everything below the segmented plane
 
-  g_pt.setInputCloud(g_cloud_segmented_plane);
-  g_pt.setFilterFieldName("z");
-  g_pt.setFilterLimits(0, plane_z);
-  g_pt.setNegative(false);
-  g_pt.filter(*output_cloud);
-  g_cloud_segmented_plane.swap(output_cloud);
+  applyPassthrough("z", 0, plane_z, g_cloud_segmented_plane);
 
+  RCLCPP_INFO(node_->get_logger(), "Points in Clusters %ld", (*g_cloud_segmented_plane).size());
 
-  RCLCPP_INFO(node_->get_logger(), "Post Plane Size %ld", (*g_cloud_segmented_plane).size());
+  return extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
 
-  std::vector<PointCPtr> shapes = extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
-
-  cw2::SHAPE ref_shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, 0};
-  for (size_t i = 0; i < shapes.size(); i++)
-  {
-    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
-    
-    if(classifyShape(shapes[i], ref_shape))
-    {
-      break;
-    }
-    colorOfPointCloud(*shapes[i], 0.3);
-  }
-
-  return ref_shape;
 }
 
 //convert local coords to world coords
