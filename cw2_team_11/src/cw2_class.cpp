@@ -158,7 +158,7 @@ static bool go_home(
 cw2::cw2(const rclcpp::Node::SharedPtr &node)
 : node_(node),
   tf_buffer_(node->get_clock()),
-  tf_listener_(tf_buffer_),
+  tf_listener_(tf_buffer_)
 {
 
   g_cloud_ptr = std::make_shared<PointC>();
@@ -285,7 +285,7 @@ bool cw2::pick_and_place_shape(
     dx = bx + 0.5 * cell_m;
   }
 
-  RCLCPP_INFO(L, "pick_and_place: shape=%s size=%dmm grasp=(%.3f,%.3f) drop=(%.3f,%.3f)",
+  RCLCPP_INFO(L, "pick_and_place: shape=%d size=%dmm grasp=(%.3f,%.3f) drop=(%.3f,%.3f)",
               static_cast<int>(shape.type), static_cast<int>(shape.size), px, py, dx, dy);
 
   // Heights — shape is ALWAYS 40mm tall regardless of cell size
@@ -312,8 +312,8 @@ bool cw2::pick_and_place_shape(
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   // Move C: grip (scaled to shape size!)
-  RCLCPP_INFO(L, "Move C: Grip (size=%dmm)", cell_size_mm);
-  strong_grip(hand_group_, L, cell_size_mm);
+  RCLCPP_INFO(L, "Move C: Grip (size=%dmm)", static_cast<int>(shape.size));
+  strong_grip(hand_group_, L, static_cast<int>(shape.size));
 
   // Move D: lift
   RCLCPP_INFO(L, "Move D: Lift");
@@ -500,9 +500,9 @@ void cw2::t1_callback(
   {
     RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
 
-    t1_shape = classifyShape(shapes[i]);
+    t1_shape = classifyShape(clusters[i]);
     
-    if(cluster_shape.type == cw2::SHAPE_TYPE::UNKNOWN || cluster_shape.size == cw2::SHAPE_SIZE::UNKNOWN)
+    if(t1_shape.type == cw2::SHAPE_TYPE::UNKNOWN || t1_shape.size == cw2::SHAPE_SIZE::UNKNOWN)
     {
       continue;
     }
@@ -584,7 +584,7 @@ void cw2::t2_callback(
 
   cw2::SHAPE reference_shape_1 = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
   cw2::SHAPE reference_shape_2 = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
-  cw2::SHAPE myster_shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
+  cw2::SHAPE mystery_shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
   std::vector<PointCPtr> clusters;
 
   
@@ -806,7 +806,7 @@ void cw2::t3_callback(
     {-0.45, -0.35, 0.65},
     {-0.45, 0.00, 0.65},
 
-  }}
+  }};
   
   std::vector<PointCPtr> clusters;
 
@@ -816,9 +816,9 @@ void cw2::t3_callback(
 
   for (const auto& pose : target_poses)
   {
-    target_pose.x = pose[0];
-    target_pose.y = pose[1];
-    target_pose.z = pose[2];
+    target_pose.orientation.x = pose[0];
+    target_pose.orientation.y = pose[1];
+    target_pose.orientation.z = pose[2];
 
     move_group3.setPoseTarget(target_pose);
     moveit::planning_interface::MoveGroupInterface::Plan plan;
@@ -835,13 +835,13 @@ void cw2::t3_callback(
 
         std::string color = colorOfPointCloud(*clusters[i], 0.3);
 
-        if (color == 'black')
+        if (color == "black")
         {
-          obstacle_locations.push_back(toWorldFrame(getCentroid(*clusters[i])));
+          obstacle_locations.push_back(toWorldFrame(getCentroid(clusters[i])));
         }
-        else if (color == 'brown')
+        else if (color == "brown")
         {
-          basked_location = toWorldFrame(getCentroid(*clusters[i]));
+          basket_location = toWorldFrame(getCentroid(clusters[i]));
         }
         else
         {
@@ -1043,7 +1043,7 @@ Eigen::Vector3f cw2::getCentroid(PointCPtr &in_cloud_ptr)
   return centroid.head<3>();  // drops the homogeneous w component
 }
 
-cw2::SHAPE cw2::classifyShape(PointCPtr in_cloud_ptr)
+cw2::SHAPE cw2::classifyShape(PointCPtr &in_cloud_ptr)
 {
 
   cw2::SHAPE shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
@@ -1143,7 +1143,7 @@ cw2::SHAPE cw2::classifyShape(PointCPtr in_cloud_ptr)
     else
     {
       RCLCPP_INFO(node_->get_logger(), "Average distance %.5f too big, exiting", avg_dist);
-      return false;
+      return shape;
     }
 
   }
@@ -1169,7 +1169,7 @@ cw2::SHAPE cw2::classifyShape(PointCPtr in_cloud_ptr)
     else
     {
       RCLCPP_INFO(node_->get_logger(), "Delta x %.3f too big, exiting", delta);
-      return false;
+      return shape;
     }
   }
 
@@ -1222,35 +1222,7 @@ cw2::SHAPE cw2::classifyShape(PointCPtr in_cloud_ptr)
   if (g_pub_pose)
   {
     g_pub_pose->publish(pose);
-  }
-
-  geometry_msgs::msg::PolygonStamped poly;
-  poly.header.frame_id = g_input_pc_frame_id;
-  poly.header.stamp = latest_cloud_msg_->header.stamp;
-
-  // Create square corners from min_OBB and max_OBB
-  std::vector<Eigen::Vector3f> corners(4);
-  // min_OBB and max_OBB are in the OBB-aligned frame, so corners are:
-  // (min.x, min.y), (max.x, min.y), (max.x, max.y), (min.x, max.y) at z = min_OBB.z (or max_OBB.z if box is not flat)
-  float z_val = (fabs(max_OBB.z - min_OBB.z) < 1e-4) ? min_OBB.z : (min_OBB.z + max_OBB.z) / 2.0f;
-  corners[0] = Eigen::Vector3f(min_OBB.x, min_OBB.y, z_val);
-  corners[1] = Eigen::Vector3f(max_OBB.x, min_OBB.y, z_val);
-  corners[2] = Eigen::Vector3f(max_OBB.x, max_OBB.y, z_val);
-  corners[3] = Eigen::Vector3f(min_OBB.x, max_OBB.y, z_val);
-
-  // Transform corners to world frame if needed (optional, here we keep in input frame)
-  for (int i = 0; i < 4; ++i) {
-    geometry_msgs::msg::Point32 pt32;
-    pt32.x = corners[i].x();
-    pt32.y = corners[i].y();
-    pt32.z = corners[i].z();
-    poly.polygon.points.push_back(pt32);
-  }
-
-  // Publish polygon for visualization
-  if (g_pub_poly) {
-    g_pub_poly->publish(poly);
-  }
+  } 
 
   return shape;
 
@@ -1361,16 +1333,16 @@ void cw2::filteringPipeline()
   segmentationPipeline(0.1, 100, 0.01);
 }
 
-std::vector<PointCPtr> shapes cw2::findClusters()
+std::vector<PointCPtr> cw2::findClusters()
 {
 
   //apply outlier detection, remove plane
   filteringPipeline();
   
-  double plane_z = getCentroid(*g_cloud_plane).z();
+  double plane_z = getCentroid(g_cloud_plane).z();
   //remove everything below the segmented plane
 
-  applyPassthrough("z", 0, plane_z, g_cloud_segmented_plane);
+  applyPassthrough(0, plane_z, "z", g_cloud_segmented_plane);
 
   RCLCPP_INFO(node_->get_logger(), "Points in Clusters %ld", (*g_cloud_segmented_plane).size());
 

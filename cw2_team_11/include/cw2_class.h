@@ -121,14 +121,14 @@ public:
   void filteringPipeline();
   Eigen::Vector3f toWorldFrame(Eigen::Vector3f local_point);
   SHAPE classifyShape(PointCPtr &in_cloud_ptr);
-  std::vector<PointCPtr> shapes cw2::findClusters();
+  std::vector<PointCPtr> findClusters();
 
 
 
   // Reusable pick-and-place for any shape size (x = 20, 30, or 40mm)
   bool pick_and_place_shape(double ox, double oy,
                             double bx, double by, double bz,
-                            const SHAPE);
+                            const SHAPE &shape);
 
   // VARIABLE DEFINITION
 
@@ -183,6 +183,7 @@ public:
   pcl::ExtractIndices<PointT> g_extract_pc;
   pcl::ExtractIndices<pcl::Normal> g_extract_normals;
   pcl::EuclideanClusterExtraction<PointT> g_extract_euclidean;
+  pcl::MomentOfInertiaEstimation<PointT> g_inertia_estimator;
 
   pcl::PointIndices::Ptr g_inliers_plane;
   pcl::ModelCoefficients::Ptr g_coeff_plane;
