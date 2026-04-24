@@ -20,11 +20,9 @@
 #include <pcl/filters/crop_box.h>
 #include <pcl/common/transforms.h> 
 
-
-
 static constexpr double FTIP = 0.105;  // link8 to fingertip offset
 
-static geometry_msgs::msg::Pose td_pose(double x, double y, double z)
+static geometry_msgs::msg::Pose td_pose(double x, double y, double z, double yaw = -M_PI/4.0)
 {
   geometry_msgs::msg::Pose p;
   p.position.x = x; 
@@ -34,7 +32,8 @@ static geometry_msgs::msg::Pose td_pose(double x, double y, double z)
   
   double roll = M_PI; 
   double pitch = 0.0;
-  double yaw = -M_PI/4.0;
+  
+  //double yaw = -M_PI/4.0;
 
   double half_roll = roll / 2.0;
   double half_pitch = pitch / 2.0;
@@ -304,6 +303,8 @@ bool cw2::pick_and_place_shape(
 
   if (!open_gripper(hand_group_, L)) { fail(); return false; }
 
+  // double shape_yaw_rad = t1_shape.yaw * (M_PI / 180.0);
+
   // Move B: descend to grip
   RCLCPP_INFO(L, "Move B: Descend");
   arm_group_->setMaxVelocityScalingFactor(0.1);
@@ -393,22 +394,10 @@ void cw2::t1_callback(
   RCLCPP_INFO(L, "Shape: %s at (%.4f, %.4f, %.4f) [world]", shape.c_str(), ox, oy, oz);
   RCLCPP_INFO(L, "Basket at (%.4f, %.4f, %.4f) [world]", gx, gy, gz);
 
-  double gx_pick, gy_pick;
-  double gx_drop, gy_drop;
+  // double gx_pick, gy_pick;
+  // double gx_drop, gy_drop;
 
-  if (shape == "nought") {
-    RCLCPP_INFO(L, "Applying nought offsets");
-    gx_pick = ox;
-    gy_pick = oy - 0.08;
-    gx_drop = gx;
-    gy_drop = gy - 0.05;
-  } else {
-    RCLCPP_INFO(L, "Applying cross offsets");
-    gx_pick = ox + 0.05;
-    gy_pick = oy;
-    gx_drop = gx + 0.02;
-    gy_drop = gy;
-  }
+  
 
   // const double shape_centroid_z = 0.020;           
   // const double grasp_l8     = ft2l8(shape_centroid_z + 0.015); 
@@ -485,7 +474,7 @@ void cw2::t1_callback(
   go_home(arm_group_, L);
   // Move 1
   RCLCPP_INFO(L, "Move A: Moving high above shape");
-  if (!joint_move(arm_group_, td_pose(gx_pick, gy_pick, safe_z), L, "Move A")) { fail(); return; }
+  if (!joint_move(arm_group_, td_pose(ox, oy, safe_z), L, "Move A")) { fail(); return; }
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   if (!open_gripper(hand_group_, L)) { fail(); return; }
@@ -499,9 +488,7 @@ void cw2::t1_callback(
   for (size_t i = 0; i < clusters.size(); i++)
   {
     RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
-
     t1_shape = classifyShape(clusters[i]);
-    
     if(t1_shape.type == cw2::SHAPE_TYPE::UNKNOWN || t1_shape.size == cw2::SHAPE_SIZE::UNKNOWN)
     {
       continue;
@@ -512,11 +499,34 @@ void cw2::t1_callback(
   // USE t1_shape.yaw FOR YAW!!
   //
 
+  double shape_yaw_rad = t1_shape.yaw * (M_PI / 180.0);
+  double gripper_yaw = shape_yaw_rad - M_PI/4.0;
+
+  double gx_pick = ox;
+  double gy_pick = oy;
+  double gx_drop = gx;
+  double gy_drop = gy;
+
+  if (shape == "nought") {
+    RCLCPP_INFO(L, "Applying nought offsets");
+    gx_pick = ox + 0.08 * std::sin(shape_yaw_rad);
+    gy_pick = oy - 0.08 * std::cos(shape_yaw_rad);
+    gx_drop = gx;
+    gy_drop = gy - 0.05;
+  } else {
+    RCLCPP_INFO(L, "Applying cross offsets");
+    gx_pick = ox + 0.05 * std::cos(shape_yaw_rad);
+    gy_pick = oy + 0.05 * std::sin(shape_yaw_rad);
+    gx_drop = gx + 0.02;
+    gy_drop = gy;
+  }
+  
+
   // Move 2
   RCLCPP_INFO(L, "Move B: Descending to grip");
   arm_group_->setMaxVelocityScalingFactor(0.1);
   arm_group_->setMaxAccelerationScalingFactor(0.1);
-  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, grip_z), L, "Move B")) { fail(); return; }
+  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, grip_z, gripper_yaw), L, "Move B")) { fail(); return; }
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   //Move 3
@@ -527,7 +537,7 @@ void cw2::t1_callback(
   RCLCPP_INFO(L, "Move D: Lifting object to safe height");
   arm_group_->setMaxVelocityScalingFactor(0.5);
   arm_group_->setMaxAccelerationScalingFactor(0.5);
-  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, safe_z), L, "Move D")) { fail(); return; }
+  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, safe_z, gripper_yaw), L, "Move D")) { fail(); return; }
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   //Move 5
