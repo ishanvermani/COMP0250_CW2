@@ -1,12 +1,12 @@
 Panels:
   - Class: rviz_common/Displays
-    Help Height: 138
+    Help Height: 107
     Name: Displays
     Property Tree Widget:
       Expanded:
         - /Global Options1
       Splitter Ratio: 0.5
-    Tree Height: 138
+    Tree Height: 70
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -244,7 +244,7 @@ Visualization Manager:
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: Cluster 2
-      Position Transformer: ""
+      Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 3
       Size (m): 0.009999999776482582
@@ -475,7 +475,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.7343765497207642
+      Distance: 1.099657416343689
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -490,18 +490,18 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5697963237762451
+      Pitch: -1.2552027702331543
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz_default_plugins)
-      Yaw: 3.103186845779419
+      Yaw: 2.1181769371032715
     Saved: ~
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 1236
+  Height: 752
   Hide Left Dock: false
   Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd00000001000000000000031600000438fc0200000004fb000000100044006900730070006c006100790073010000006e000001820000018200fffffffb0000001200530065006c0065006300740069006f006e01000001fc000000b0000000b000fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007301000002b8000000b0000000b000fffffffb0000000a005600690065007700730100000374000001320000013200ffffff000002be0000043800000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd00000001000000000000031600000296fc0200000004fb000000100044006900730070006c006100790073010000003d000000ee000000c900fffffffb0000001200530065006c0065006300740069006f006e01000001310000006d0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007301000001a40000006c0000005c00fffffffb0000000a005600690065007700730100000216000000bd000000a400ffffff000002c40000029600000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Tool Properties:
@@ -509,5 +509,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1504
-  X: 0
-  Y: 54
+  X: -729
+  Y: 432

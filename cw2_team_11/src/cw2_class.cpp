@@ -290,7 +290,7 @@ bool cw2::pick_and_place_shape(
   // Heights — shape is ALWAYS 40mm tall regardless of cell size
   double grip_z   = 0.020 + 0.15;
   double safe_z   = 0.020 + 0.65;
-  double basket_z = bz + 0.2;
+  double basket_z = bz + 0.35;
 
   auto fail = [&]() { open_gripper(hand_group_, L); go_home(arm_group_, L); };
 
@@ -316,6 +316,7 @@ bool cw2::pick_and_place_shape(
   RCLCPP_INFO(L, "Move C: Grip (size=%dmm)", static_cast<int>(shape.size));
   strong_grip(hand_group_, L, static_cast<int>(shape.size));
 
+ 
   // Move D: lift
   RCLCPP_INFO(L, "Move D: Lift");
   arm_group_->setMaxVelocityScalingFactor(0.5);
@@ -411,8 +412,12 @@ void cw2::t1_callback(
   //             grasp_l8, pre_grasp_l8, transit_l8, release_l8);
 
   double grip_z = request->object_point.point.z + 0.15;
-  double basket_z = request->goal_point.point.z + 0.2;
+  double basket_z = request->goal_point.point.z + 0.35;
   double safe_z = request->object_point.point.z + 0.65;
+
+  moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
+  hand_group.setMaxVelocityScalingFactor(1.0);
+  hand_group.setMaxAccelerationScalingFactor(1.0);
 
   auto fail = [&]() {
     open_gripper(hand_group_, L);
@@ -530,43 +535,65 @@ void cw2::t1_callback(
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   //Move 3
-  RCLCPP_INFO(L, "Move C: Closing gripper. I WANT THE BIG BUNNY");
-  strong_grip(hand_group_, L, 40);  // Task 1 always x=40mm
+
+  //OLD GRIP//
+  // RCLCPP_INFO(L, "Move C: Closing gripper. I WANT THE BIG BUNNY");
+  // strong_grip(hand_group_, L, 40);  // Task 1 always x=40mm
+
+   //I think this grip works faster
+  RCLCPP_INFO(L, "Closing gripper. TOUT TOUT TOUT. I WANT THE BIG BUNNY");
+  hand_group.setJointValueTarget("panda_finger_joint1", 0.020); 
+  moveit::planning_interface::MoveGroupInterface::Plan close_plan;
+  bool success = (hand_group.plan(close_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  hand_group.execute(close_plan);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   //Move 4
   RCLCPP_INFO(L, "Move D: Lifting object to safe height");
   arm_group_->setMaxVelocityScalingFactor(0.5);
   arm_group_->setMaxAccelerationScalingFactor(0.5);
   if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, safe_z, gripper_yaw), L, "Move D")) { fail(); return; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  //std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   //Move 5
   RCLCPP_INFO(L, "Move E: Translating over obstacles to basket");
   if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move E")) { fail(); return; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  //std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   //Move 6
   RCLCPP_INFO(L, "Move F: Descending into basket");
    if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, basket_z), L, "Move F")) { fail(); return; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   
 
   // //Move 7
-  // if (!open_gripper(hand_group_, L)) { fail(); return; }
-  RCLCPP_INFO(L, "Move G: KOBE! Releasing shape");
-  moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
-  hand_group.setMaxVelocityScalingFactor(1.0);
-  hand_group.setMaxAccelerationScalingFactor(1.0);
-  moveit::planning_interface::MoveGroupInterface::Plan hand_plan;
-  hand_group.setNamedTarget("open");
-  bool success = (hand_group.plan(hand_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  hand_group.execute(hand_plan);
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  RCLCPP_INFO(L, "Move E: Translating over obstacles to basket");
-  if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move E")) { fail(); return; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  // if (!open_gripper(hand_group_, L)) { fail(); return; }
+
+  //OLD RELEASE//
+  // RCLCPP_INFO(L, "Move G: KOBE! Releasing shape");
+  // moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
+  // hand_group.setMaxVelocityScalingFactor(1.0);
+  // hand_group.setMaxAccelerationScalingFactor(1.0);
+  // moveit::planning_interface::MoveGroupInterface::Plan hand_plan;
+  // hand_group.setNamedTarget("open");
+  // bool success = (hand_group.plan(hand_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  // hand_group.execute(hand_plan);
+  // std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+
+  //I think this release works faster
+  RCLCPP_INFO(L, "KOBE!");
+  hand_group.setNamedTarget("open");
+  moveit::planning_interface::MoveGroupInterface::Plan final_open_plan;
+  success = (hand_group.plan(final_open_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  hand_group.execute(final_open_plan);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+  // RCLCPP_INFO(L, "Move E: Translating over obstacles to basket");
+  // if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move E")) { fail(); return; }
+  // std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   //Move 8
   RCLCPP_INFO(L, "Returning to 'ready' home position...");
@@ -783,12 +810,15 @@ void cw2::t3_callback(
   auto L = node_->get_logger();
   RCLCPP_INFO(L, "Starting Task 3: Explicit Perimeter Sweep...");
 
-  static const std::string planning_group = "panda_arm";
-  moveit::planning_interface::MoveGroupInterface move_group3(node_, planning_group);
+  arm_group_->setMaxVelocityScalingFactor(0.5);
+  arm_group_->setMaxAccelerationScalingFactor(0.5);
 
-  move_group3.setPlanningTime(10.0); //maybe chabge that to 5 seconds
-  move_group3.setMaxVelocityScalingFactor(0.2);
-  move_group3.setMaxAccelerationScalingFactor(0.2);
+  // static const std::string planning_group = "panda_arm";
+  // moveit::planning_interface::MoveGroupInterface move_group3(node_, planning_group);
+
+  // move_group3.setPlanningTime(10.0); //maybe chabge that to 5 seconds
+  // move_group3.setMaxVelocityScalingFactor(0.2);
+  // move_group3.setMaxAccelerationScalingFactor(0.2);
   
   geometry_msgs::msg::Pose target_pose; // Declare target_pose here so it can be reused for all three moves (we will just update the position each time)
 
@@ -812,15 +842,23 @@ void cw2::t3_callback(
   target_pose.orientation.w = w; 
 
 
-  std::array<std::array<double, 3>, 8> target_poses = {{
+  std::array<std::array<double, 3>, 16> target_poses = {{
     {-0.45, 0.35, 0.65},
+    {-0.23, 0.35, 0.65},
     {0.00, 0.35, 0.65},
+    {0.23, 0.35, 0.65},
     {0.45, 0.35, 0.65},
+    {0.45, 0.17, 0.65},
     {0.45, 0.00, 0.65},
+    {0.45, -0.17, 0.65},
     {0.45, -0.35, 0.65},
+    {0.23, -0.35, 0.65},
     {0.00, -0.35, 0.65},
+    {-0.23, -0.35, 0.65},
     {-0.45, -0.35, 0.65},
+    {-0.45, -0.17, 0.65},
     {-0.45, 0.00, 0.65},
+    {-0.45, 0.17, 0.65},
 
   }};
   
@@ -836,11 +874,15 @@ void cw2::t3_callback(
     target_pose.position.y = pose[1];
     target_pose.position.z = pose[2];
 
-    move_group3.setPoseTarget(target_pose);
-    moveit::planning_interface::MoveGroupInterface::Plan plan;
-    if(move_group3.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS)
+
+
+    // move_group3.setPoseTarget(target_pose);
+    // moveit::planning_interface::MoveGroupInterface::Plan plan;
+    // if(move_group3.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS)
+    // {
+    //   move_group3.execute(plan);
+    if (joint_move(arm_group_, target_pose, L, "Scanning Move"))
     {
-      move_group3.execute(plan);
       std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
       clusters = findClusters();
@@ -883,7 +925,7 @@ void cw2::t3_callback(
 
   }
 
-
+  
   // TO DO
   // COUNT NUM SHAPES
   // FIND MOST COMMON SHAPE
