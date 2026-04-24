@@ -227,7 +227,7 @@ public:
   int    pcl_plane_max_iterations_ = 100;
   double pcl_plane_distance_       = 0.03;
   double pcl_cluster_tolerance_    = 0.02;
-  int    pcl_cluster_min_size_     = 5000;
+  int    pcl_cluster_min_size_     = 3000;
   int    pcl_cluster_max_size_     = 60000;
 
 
