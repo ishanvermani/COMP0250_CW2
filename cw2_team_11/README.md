@@ -18,9 +18,9 @@
 
 | Task | Contributor(s) | Split | Approx. Hours |
 |------|----------------|-------|---------------|
-| Task 1 | Ogulcan, Chris, Ishan | 100% | 15 hrs |
-| Task 2 | Ishan, Chris | % / 50% | 15 hrs each |
-| Task 3 | Ogulcan, Chris, Ishan | 40% / 40% / 20% | 5 hrs each |
+| Task 1 | Ogulcan, Chris, Ishan | 45% / 45% / 10% | 20 hrs total |
+| Task 2 | Ishan, Chris | 90% / 10% | 20 hrs each |
+| Task 3 | Ogulcan, Chris, Ishan | 33% / 33% / 33% | 10 hrs total |
 
 ---
 
