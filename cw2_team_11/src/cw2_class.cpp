@@ -626,11 +626,11 @@ void cw2::t2_callback(
 
   
   static const std::string planning_group = "panda_arm";
-  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group2 = std::make_shared<moveit::planning_interface::MoveGroupInterface>(node_, planning_group);
+  moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
 
-  move_group2->setPlanningTime(5.0);
-  move_group2->setMaxVelocityScalingFactor(0.2);
-  move_group2->setMaxAccelerationScalingFactor(0.2);
+  move_group2.setPlanningTime(5.0);
+  move_group2.setMaxVelocityScalingFactor(0.2);
+  move_group2.setMaxAccelerationScalingFactor(0.2);
   
   geometry_msgs::msg::Pose target_pose; // Declare target_pose here so it can be reused for all three moves (we will just update the position each time)
 
@@ -658,14 +658,13 @@ void cw2::t2_callback(
   target_pose.position.x = request->ref_object_points[0].point.x;
   target_pose.position.y = request->ref_object_points[0].point.y;
   target_pose.position.z = request->ref_object_points[0].point.z + 0.5;
-  move_group2->setPoseTarget(target_pose);
+  move_group2.setPoseTarget(target_pose);
   moveit::planning_interface::MoveGroupInterface::Plan plan1;
 
-  // if(move_group2.plan(plan1) == moveit::core::MoveItErrorCode::SUCCESS)
-  // {
-  //   move_group2.execute(plan1);
-  if (cart_move(move_group2, target_pose, L, "Move to Ref 1"))
+  if(move_group2.plan(plan1) == moveit::core::MoveItErrorCode::SUCCESS)
   {
+    move_group2.execute(plan1);
+
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
 
@@ -697,14 +696,13 @@ void cw2::t2_callback(
   target_pose.position.y = request->ref_object_points[1].point.y;
   target_pose.position.z = request->ref_object_points[1].point.z + 0.5;
 
-  move_group2->setPoseTarget(target_pose);
+  move_group2.setPoseTarget(target_pose);
   moveit::planning_interface::MoveGroupInterface::Plan plan2;
 
-  // if(move_group2.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS)
-  // {
-  //   move_group2.execute(plan2);
-  if (cart_move(move_group2, target_pose, L, "Move to Ref 2"))
+  if(move_group2.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS)
   {
+    move_group2.execute(plan2);
+ 
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   
 
@@ -735,14 +733,13 @@ void cw2::t2_callback(
   target_pose.position.y = request->mystery_object_point.point.y;
   target_pose.position.z = request->mystery_object_point.point.z + 0.5;
 
-  move_group2->setPoseTarget(target_pose);
+  move_group2.setPoseTarget(target_pose);
   moveit::planning_interface::MoveGroupInterface::Plan plan3;
 
-  // if(move_group2.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS)
-  // {
-  //   move_group2.execute(plan3);
-  if (cart_move(move_group2, target_pose, L, "Move to Mystery"))
+  if(move_group2.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS)
   {
+    move_group2.execute(plan3);
+
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
 
