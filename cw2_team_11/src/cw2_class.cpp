@@ -599,11 +599,11 @@ void cw2::t2_callback(
 
   
   static const std::string planning_group = "panda_arm";
-  moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
+  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group2 = std::make_shared<moveit::planning_interface::MoveGroupInterface>(node_, planning_group);
 
-  move_group2.setPlanningTime(5.0);
-  move_group2.setMaxVelocityScalingFactor(0.2);
-  move_group2.setMaxAccelerationScalingFactor(0.2);
+  move_group2->setPlanningTime(5.0);
+  move_group2->setMaxVelocityScalingFactor(0.2);
+  move_group2->setMaxAccelerationScalingFactor(0.2);
   
   geometry_msgs::msg::Pose target_pose; // Declare target_pose here so it can be reused for all three moves (we will just update the position each time)
 
@@ -631,12 +631,14 @@ void cw2::t2_callback(
   target_pose.position.x = request->ref_object_points[0].point.x;
   target_pose.position.y = request->ref_object_points[0].point.y;
   target_pose.position.z = request->ref_object_points[0].point.z + 0.5;
-  move_group2.setPoseTarget(target_pose);
+  move_group2->setPoseTarget(target_pose);
   moveit::planning_interface::MoveGroupInterface::Plan plan1;
 
-  if(move_group2.plan(plan1) == moveit::core::MoveItErrorCode::SUCCESS)
+  // if(move_group2.plan(plan1) == moveit::core::MoveItErrorCode::SUCCESS)
+  // {
+  //   move_group2.execute(plan1);
+  if (cart_move(move_group2, target_pose, L, "Move to Ref 1"))
   {
-    move_group2.execute(plan1);
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
 
@@ -668,14 +670,16 @@ void cw2::t2_callback(
   target_pose.position.y = request->ref_object_points[1].point.y;
   target_pose.position.z = request->ref_object_points[1].point.z + 0.5;
 
-  move_group2.setPoseTarget(target_pose);
+  move_group2->setPoseTarget(target_pose);
   moveit::planning_interface::MoveGroupInterface::Plan plan2;
 
-  if(move_group2.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS)
+  // if(move_group2.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS)
+  // {
+  //   move_group2.execute(plan2);
+  if (cart_move(move_group2, target_pose, L, "Move to Ref 2"))
   {
-    move_group2.execute(plan2);
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
+  
 
     clusters = findClusters();
     
@@ -704,12 +708,14 @@ void cw2::t2_callback(
   target_pose.position.y = request->mystery_object_point.point.y;
   target_pose.position.z = request->mystery_object_point.point.z + 0.5;
 
-  move_group2.setPoseTarget(target_pose);
+  move_group2->setPoseTarget(target_pose);
   moveit::planning_interface::MoveGroupInterface::Plan plan3;
 
-  if(move_group2.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS)
+  // if(move_group2.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS)
+  // {
+  //   move_group2.execute(plan3);
+  if (cart_move(move_group2, target_pose, L, "Move to Mystery"))
   {
-    move_group2.execute(plan3);
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
 
@@ -806,7 +812,7 @@ void cw2::t3_callback(
   target_pose.orientation.w = w; 
 
 
-  std::array<std::array<float, 3>, 8> target_poses = {{
+  std::array<std::array<double, 3>, 8> target_poses = {{
     {-0.45, 0.35, 0.65},
     {0.00, 0.35, 0.65},
     {0.45, 0.35, 0.65},
@@ -826,9 +832,9 @@ void cw2::t3_callback(
 
   for (const auto& pose : target_poses)
   {
-    target_pose.orientation.x = pose[0];
-    target_pose.orientation.y = pose[1];
-    target_pose.orientation.z = pose[2];
+    target_pose.position.x = pose[0];
+    target_pose.position.y = pose[1];
+    target_pose.position.z = pose[2];
 
     move_group3.setPoseTarget(target_pose);
     moveit::planning_interface::MoveGroupInterface::Plan plan;
@@ -848,14 +854,16 @@ void cw2::t3_callback(
         if (color == "black")
         {
           obstacle_locations.push_back(toWorldFrame(getCentroid(clusters[i])));
+          RCLCPP_INFO(node_->get_logger(), "Classified as obstacle");
         }
         else if (color == "brown")
         {
           basket_location = toWorldFrame(getCentroid(clusters[i]));
+          RCLCPP_INFO(node_->get_logger(), "Classified as box");
         }
         else
         {
-
+          
           cw2::SHAPE shape = classifyShape(clusters[i]);
 
           if (shape.type != cw2::SHAPE_TYPE::UNKNOWN && shape.size != cw2::SHAPE_SIZE::UNKNOWN) 
