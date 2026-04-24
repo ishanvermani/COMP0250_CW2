@@ -864,9 +864,12 @@ void cw2::t3_callback(
   
   std::vector<PointCPtr> clusters;
 
-  std::vector<cw2::SHAPE> found_shapes;
+  std::vector<cw2::SHAPE> noughts;
+  std::vector<cw2::SHAPE> crosses;
   std::vector<Eigen::Vector3f> obstacle_locations;
   Eigen::Vector3f basket_location;
+
+  std::vector<Eigen::Vector3f> all_locations;
 
   for (const auto& pose : target_poses)
   {
@@ -891,30 +894,53 @@ void cw2::t3_callback(
       {
         RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
 
+        
+
         std::string color = colorOfPointCloud(*clusters[i], 0.3);
+
+        cw2::SHAPE shape = classifyShape(clusters[i]);
 
         if (color == "black")
         {
           obstacle_locations.push_back(toWorldFrame(getCentroid(clusters[i])));
+          all_locations.push_back(toWorldFrame(getCentroid(clusters[i])));
           RCLCPP_INFO(node_->get_logger(), "Classified as obstacle");
         }
-        else if (color == "brown")
+        else if (color == "brown" && shape.type == cw2::SHAPE_TYPE::NOUGHT && shape.size == cw2::SHAPE_SIZE::UNKNOWN)
         {
           basket_location = toWorldFrame(getCentroid(clusters[i]));
-          RCLCPP_INFO(node_->get_logger(), "Classified as box");
+          all_locations.push_back(basket_location);
+          RCLCPP_INFO(node_->get_logger(), "Classified as a basket");
         }
-        else
-        {
-          
-          cw2::SHAPE shape = classifyShape(clusters[i]);
+        else if (shape.type != cw2::SHAPE_TYPE::UNKNOWN && shape.size != cw2::SHAPE_SIZE::UNKNOWN)
+        { 
 
-          if (shape.type != cw2::SHAPE_TYPE::UNKNOWN && shape.size != cw2::SHAPE_SIZE::UNKNOWN) 
-          {
-            found_shapes.push_back(shape);
-            break; 
+          bool is_duplicate = false;
+
+          // check to see if cluster is within 20mm of something else saved
+          for (const auto& pt : all_locations) {
+            if ((shape.centroid - pt).norm() < 0.020) {
+                is_duplicate = true;
+                break;
+            }
           }
-          
+
+          if (!is_duplicate)
+          {
+            if (shape.type == cw2::SHAPE_TYPE::NOUGHT)
+            {
+              noughts.push_back(shape);
+            }
+            else if (shape.type == cw2::SHAPE_TYPE::CROSS)
+            {
+              crosses.push_back(shape);
+            }
+
+            all_locations.push_back(shape.centroid);
+          }
+  
         }
+
       }
 
     }
@@ -923,17 +949,36 @@ void cw2::t3_callback(
       RCLCPP_WARN(L, "Error During Motion Planning of pose {%.2f, %.2f, %.2f}", pose[0], pose[1], pose[2]);
     }
 
+
+
+    int num_crosses = (int) crosses.size();
+    int num_noughts = (int) noughts.size();
+
+    std::sort(crosses.begin(), crosses.end(), [](cw2::SHAPE x, cw2::SHAPE y) 
+		{
+			return x.size > y.size;
+    });
+
+    std::sort(noughts.begin(), noughts.end(), [](cw2::SHAPE x, cw2::SHAPE y) 
+		{
+			return x.size > y.size;
+    });
+
+    response->total_num_shapes = num_crosses + num_noughts;
+
+    if (num_crosses > num_noughts)
+    {
+      response->num_most_common_shape = num_crosses;
+      //pick and place crosses[0]
+    }
+    else
+    {
+      response->num_most_common_shape = num_noughts;
+      //pick and place noughts[0]
+    }
+
+
   }
-
-  
-  // TO DO
-  // COUNT NUM SHAPES
-  // FIND MOST COMMON SHAPE
-  // RETURN TO RESPONE
-  //PICK UP SHAPES
-
-  // FOR TESTING, CAN USE found_shapes[0] in pick and place situations. 
-  // Basket location may have to be hardcoded if detection is weak. 
 
 }
 
