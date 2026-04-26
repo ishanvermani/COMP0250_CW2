@@ -157,7 +157,7 @@ void cw2::cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// Task 1: Pick and Place
+// Task 1: Pick and Place (Task 1 callback - receives a shape type (either a nought or cross), its location, and a basket location. We transform both points into the robot's base frame, move the arm above the shape, use the point cloud pipeline to detect the shape's size and orientation, then pick it up and place it in the basket.
 ///////////////////////////////////////////////////////////////////////////////
 
 void cw2::t1_callback(
@@ -173,7 +173,7 @@ void cw2::t1_callback(
               request->object_point.header.frame_id.c_str(),
               request->goal_point.header.frame_id.c_str());
 
-  
+  // Transform the object and goal points from whatever frame they arrive in (usually "world") into panda_link0, which is the robot's base frame that we use. All of our motion planning uses this frame.
   geometry_msgs::msg::PointStamped obj_world, goal_world;
   const std::string target_frame = "panda_link0";
   try {
@@ -197,6 +197,7 @@ void cw2::t1_callback(
   RCLCPP_INFO(L, "Shape: %s at (%.4f, %.4f, %.4f) [world]", shape.c_str(), ox, oy, oz);
   RCLCPP_INFO(L, "Basket at (%.4f, %.4f, %.4f) [world]", gx, gy, gz);
 
+  // Heights are relative to the shape's Z coordinate. grip_z variable is where the fingertips need to be in order to grasp the shape. safe_z is high enough to clear everything on the table during transit and avoid obstacles. basket_z accounts for the basket rim height.
 
   double grip_z = request->object_point.point.z + 0.15;
   double basket_z = request->goal_point.point.z + 0.35;
@@ -208,7 +209,9 @@ void cw2::t1_callback(
     go_home(arm_group_, L);
   };
 
-  
+
+
+  // Start from the home position, then move directly above the shape's centroid. We need to be above the shape before running the point cloud pipeline because the camera is mounted on the wrist, it can only see what's below the end effector.
   go_home(arm_group_, L);
 
 
@@ -219,7 +222,7 @@ void cw2::t1_callback(
 
   if (!open_gripper(hand_group_, L)) { fail(); return; }
 
-  // Determine shape yaw
+  // Runs the point cloud pipeline, segments out the ground plane, cluster the remaining points, and classify each cluster using eigenvalue analysis. This gives us the specific space (nought or cross), size (20/30/40mm), and orientation (yaw angle). We break on the first valid detection since Task 1 only has one shape on the table.
 
   std::vector<PointCPtr> clusters = findClusters();
 
@@ -235,7 +238,11 @@ void cw2::t1_callback(
     }
   }
 
+  // Override the detected centroid with the coordinates provided by the service request, since those are ground truth. The point cloud centroid can drift slightly depending on camera angle.
+
   t1_shape.centroid = Eigen::Vector3f(ox, oy, oz);
+
+  // Hand off to the shared pick-and-place function which handles size-specific grasp offsets, gripper orientation, and the full pick-lift-move-place-release sequence.
 
   pick_and_place_shape(t1_shape, gx, gy, gz);
 
@@ -618,6 +625,7 @@ void cw2::t3_callback(
 ///////////////////////////////////////////////////////////////////////////////
 // Reusable pick-and-place for ANY shape size (x = 20, 30, or 40mm)
 // Offsets and grip force scale automatically with input shape.
+// Takes a detected shape (with type, size, yaw, and centroid) and a target drop location. Computes grasp offsets based on shape geometry and executes the full motion sequence.
 ///////////////////////////////////////////////////////////////////////////////
 
 bool cw2::pick_and_place_shape(
@@ -629,6 +637,8 @@ bool cw2::pick_and_place_shape(
   double cell_m = static_cast<float>(shape.size) / 1000.0;
 
   double shape_yaw_rad = shape.yaw * (M_PI / 180.0);
+
+  // For noughts, we rotate the gripper to align with the shape's detected yaw so the fingers straddle the wall cleanly. For crosses, we keep the default -45 degree orientation since the arms are symmetrical and rotation isn't needed.
   double gripper_yaw = shape_yaw_rad - M_PI/4.0;
 
   double gx_pick = shape.centroid.x();
@@ -662,6 +672,7 @@ bool cw2::pick_and_place_shape(
 
   // Pickup offsets for each scenario
 
+  // Grasp offset from the shape centroid. For noughts, we offset along the yaw direction to land on the middle of the right side wall, further out for larger shapes since the wall is further from center. For crosses, we offset in fixed +X to grab one of the arms (specifically the top arm), no rotation needed since we use the default gripper angle.
   if (shape.type == cw2::SHAPE_TYPE::NOUGHT) {
     if (shape.size == cw2::SHAPE_SIZE::MM_40){
     RCLCPP_INFO(L, "Applying nought offsets");
@@ -709,6 +720,8 @@ bool cw2::pick_and_place_shape(
 
   // Move 2
   RCLCPP_INFO(L, "Move B: Descending to grip");
+
+  // Slow down the arm before descending to avoid knocking the shape. Cartesian path ensures a straight vertical drop rather than an arc.
   arm_group_->setMaxVelocityScalingFactor(0.1);
   arm_group_->setMaxAccelerationScalingFactor(0.1);
   if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, grip_z, gripper_yaw), L, "Move B")) { fail(); return false; }
@@ -716,6 +729,7 @@ bool cw2::pick_and_place_shape(
 
 
   //Conditional grip for certains hapes
+  // Small crosses (x=20) need the scaled strong_grip since the arm width is only 20mm and a loose grip will push them out. Larger shapes can use a simpler fixed finger target.
   if (shape.size == cw2::SHAPE_SIZE::MM_20 && shape.type == cw2::SHAPE_TYPE::CROSS)
   {
     RCLCPP_INFO(L, "Move C: Closing gripper");
@@ -734,6 +748,7 @@ bool cw2::pick_and_place_shape(
   }
 
   //Move 4
+  // Lift straight up with a Cartesian path to avoid dragging the shape sideways. Restore normal speed for the transit to the basket.
   RCLCPP_INFO(L, "Move D: Lifting object to safe height");
   arm_group_->setMaxVelocityScalingFactor(0.5);
   arm_group_->setMaxAccelerationScalingFactor(0.5);
@@ -748,6 +763,8 @@ bool cw2::pick_and_place_shape(
   if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, basket_z), L, "Move F")) { fail(); return false; }
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
+
+  // Open the gripper fully and wait 1 second to make sure the shape has time to fall cleanly into the basket before we move away.
   RCLCPP_INFO(L, "Releasing Item!");
   hand_group_->setNamedTarget("open");
   moveit::planning_interface::MoveGroupInterface::Plan final_open_plan;
