@@ -140,17 +140,10 @@ cw2::cw2(const rclcpp::Node::SharedPtr &node)
 
 void cw2::cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg)
 {
-  // pcl::PCLPointCloud2 pcl_cloud;
-  // pcl_conversions::toPCL(*msg, pcl_cloud);
-
-  // PointCPtr latest_cloud(new PointC);
-  // pcl::fromPCLPointCloud2(pcl_cloud, *latest_cloud);
 
   std::lock_guard<std::mutex> lock(cloud_mutex_);
-  // g_input_pc_frame_id_ = msg->header.frame_id;
-  // g_cloud_ptr = std::move(latest_cloud);
-  // ++g_cloud_sequence_;
 
+  //store most recent message, which will be processed on demand
   latest_cloud_msg_ = msg;
 
 }
@@ -199,8 +192,6 @@ void cw2::t1_callback(
 
   // Heights are relative to the shape's Z coordinate. grip_z variable is where the fingertips need to be in order to grasp the shape. safe_z is high enough to clear everything on the table during transit and avoid obstacles. basket_z accounts for the basket rim height.
 
-  double grip_z = request->object_point.point.z + 0.15;
-  double basket_z = request->goal_point.point.z + 0.35;
   double safe_z = request->object_point.point.z + 0.65;
 
 
@@ -263,6 +254,7 @@ void cw2::t2_callback(
   (void)request;
   response->mystery_object_num = -1;
 
+  // Initialize each of the three shapes as unknown. If they don't get populated, this is the state they will stay in.
   cw2::SHAPE reference_shape_1 = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
   cw2::SHAPE reference_shape_2 = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
   cw2::SHAPE mystery_shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
@@ -278,6 +270,7 @@ void cw2::t2_callback(
   
   geometry_msgs::msg::Pose target_pose; // Declare target_pose here so it can be reused for all three moves (we will just update the position each time)
 
+  // set fixed orientation for the arm as it scans each shape
   double roll = M_PI; // 180 degrees
   double pitch = 0.0;
   double yaw = -M_PI / 4.0; // -45 degrees
@@ -297,7 +290,7 @@ void cw2::t2_callback(
   target_pose.orientation.z = z;
   target_pose.orientation.w = w;  
 
-    //Reference object 1
+  // Go to Reference object 1
   
   target_pose.position.x = request->ref_object_points[0].point.x;
   target_pose.position.y = request->ref_object_points[0].point.y;
@@ -311,15 +304,17 @@ void cw2::t2_callback(
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-
+    // Find all PCL clusters in this view
     clusters = findClusters();
     
     for (size_t i = 0; i < clusters.size(); i++)
     {
       RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
 
+      // Attempt to classfiy each shape
       reference_shape_1 = classifyShape(clusters[i]);
       
+      // If the classification was succesful, break. If not, loop will finish with a shape having an unknown property
       if (reference_shape_1.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_1.size != cw2::SHAPE_SIZE::UNKNOWN) 
       {
         break; 
@@ -335,7 +330,7 @@ void cw2::t2_callback(
   
 
   
-  //Reference object 2
+  //Go to Reference object 2
   target_pose.position.x = request->ref_object_points[1].point.x;
   target_pose.position.y = request->ref_object_points[1].point.y;
   target_pose.position.z = request->ref_object_points[1].point.z + 0.5;
@@ -372,7 +367,7 @@ void cw2::t2_callback(
   }
 
 
-  //Mystery object
+  //Go to Mystery Object
   target_pose.position.x = request->mystery_object_point.point.x;
   target_pose.position.y = request->mystery_object_point.point.y;
   target_pose.position.z = request->mystery_object_point.point.z + 0.5;
@@ -408,7 +403,7 @@ void cw2::t2_callback(
     return;
   }
 
-
+  // Compare the two shapes, but ensure that the shape type is known
   if (reference_shape_1.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_1.type == mystery_shape.type)
   {
     response->mystery_object_num = 1;
@@ -458,7 +453,7 @@ void cw2::t3_callback(
     go_home(arm_group_, L);
   };
 
-  //Poses to visit to survey board
+  //Poses to visit to survey environment
   std::array<std::array<double, 3>, 16> target_poses = {{
     {-0.45, 0.00, 0.65},
     {-0.45, 0.17, 0.65},
@@ -481,6 +476,7 @@ void cw2::t3_callback(
   
   std::vector<PointCPtr> clusters;
 
+  // arrays to populate found information
   std::vector<cw2::SHAPE> noughts;
   std::vector<cw2::SHAPE> crosses;
   std::vector<Eigen::Vector3f> obstacle_locations;
@@ -490,49 +486,55 @@ void cw2::t3_callback(
 
   for (const auto& pose : target_poses)
   {
-
+    // go to each pose
     if (joint_move(arm_group_, td_pose(pose[0], pose[1], pose[2]), L, "Scanning Move"))
     {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
+      //survey all clusters found
       clusters = findClusters();
 
+      //we must process all clusters, as we are looking for multiple types of shapes
       for (size_t i = 0; i < clusters.size(); i++)
       {
         RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
 
         
-
+        // extract color and identify shape
         std::string color = colorOfPointCloud(*clusters[i], 0.3);
 
         cw2::SHAPE shape = classifyShape(clusters[i]);
 
+        //obstacle case comes first as we expect a failed shape classification here - we don't have a 'square' class
         if (color == "black")
         {
           obstacle_locations.push_back(toWorldFrame(getCentroid(clusters[i])));
           all_locations.push_back(toWorldFrame(getCentroid(clusters[i])));
           RCLCPP_INFO(node_->get_logger(), "Classified as obstacle");
         }
+        // check for basket - it will be brown and a nought, but too big for our size classification
+        // we have these extra checks as sometimes the shadows can make other shapes brown
         else if (color == "brown" && shape.type == cw2::SHAPE_TYPE::NOUGHT && shape.size == cw2::SHAPE_SIZE::UNKNOWN)
         {
           basket_location = toWorldFrame(getCentroid(clusters[i]));
           all_locations.push_back(basket_location);
           RCLCPP_INFO(node_->get_logger(), "Classified as a basket");
         }
+        // we have a shape!
         else if (shape.type != cw2::SHAPE_TYPE::UNKNOWN && shape.size != cw2::SHAPE_SIZE::UNKNOWN)
         { 
-
           bool is_duplicate = false;
 
-          // check to see if cluster is within 20mm of something else saved
+          // check to see if cluster is within 20mm of something else saved. If it is, we have a duplicate. Ignore
           for (const auto& pt : all_locations) {
             if ((shape.centroid - pt).norm() < 0.100) {
                 is_duplicate = true;
-                RCLCPP_INFO (L, "oupsie daisy!! we have a duplicate centroid. I won't save that!");
+                RCLCPP_INFO (L, "Duplicate centroid, skipping ...");
                 break;
             }
           }
 
+          // store shape
           if (!is_duplicate)
           {
             if (shape.type == cw2::SHAPE_TYPE::NOUGHT)
@@ -610,7 +612,7 @@ void cw2::t3_callback(
 
   // Cluster z correction
 
-  shape_to_pick.centroid.z() = shape_to_pick.centroid.z() - 0.065; //We scan the top of the shape
+  shape_to_pick.centroid.z() = shape_to_pick.centroid.z() - 0.065; //We scan the top of the shape, adjust to something below
   basket_location.z() = basket_location.z() - 0.050; // subtract 5cm of basket height
 
 
@@ -948,7 +950,6 @@ void cw2::findNormals(int g_normal_k)
 
 void cw2::segmentationPipeline(double g_plane_normal_dist_weight, int g_plane_max_iterations, double g_plane_distance)
 {
-  // TODO(student-9): Implement normal-plane segmentation.
 
   //Configure model
   g_seg.setOptimizeCoefficients(true);
@@ -1001,25 +1002,27 @@ std::vector<PointCPtr> cw2::extractEuclideanClusters(double clusterTolerance, in
 
   std::vector<PointCPtr> all_clouds;
 
+  //store clusters in array to return
   for (const auto& cluster : cluster_indices)
   {
     PointCPtr cloud_cluster(new PointC);
     for (const auto& idx : cluster.indices) {
       cloud_cluster->push_back((*g_cloud_segmented_plane)[idx]);
     }
+    //configure cloud params
     cloud_cluster->width = cloud_cluster->size();
     cloud_cluster->height = 1;
     cloud_cluster->is_dense = true;
 
-
+    //skip, dont store this cluster
     if (cloud_cluster->size() == 0)
     {
       continue;
     }
 
+    // debug only - show clusters found in rviz
     if (num_cluster < 6)
     {
-    
       // For testing only
       std_msgs::msg::Header header;
       header.frame_id = "color";
@@ -1050,6 +1053,7 @@ Eigen::Vector3f cw2::getCentroid(PointCPtr &in_cloud_ptr)
 cw2::SHAPE cw2::classifyShape(PointCPtr &in_cloud_ptr)
 {
 
+  // start with undefined shape
   cw2::SHAPE shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
 
   // Compute OBB and Eigenvalues of clustered cloud
@@ -1323,6 +1327,7 @@ void cw2::filteringPipeline()
   segmentationPipeline(0.1, 100, 0.01);
 }
 
+// PCL pipeline for finding clusters
 std::vector<PointCPtr> cw2::findClusters()
 {
 

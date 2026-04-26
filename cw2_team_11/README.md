@@ -130,7 +130,6 @@ ros2 service call /task cw2_world_spawner/srv/TaskSetup "{task_index: 3}"
 | RViz not wanted | Add `use_rviz:=false` to the launch command |
 | Adding this package to a new workspace | Add `tf2_ros` to `CMakeLists.txt` |
 | Basket not detected correctly in a dark Gazebo environment | Dark lighting reduces RGB values seen by the camera. Adjust the `brown` entry in the `colors` array in `cw2_class.h` to match the true observed colours in your environment |
-| Box centroid is off-centre (box partially outside camera FOV) | If a box is cut off at the edge of the camera frame, the computed cluster centroid will be shifted away from the true box centre. Increase the `0.3 m` coordinate-matching tolerance (Task 2) to compensate |
 
 ---
 
@@ -147,20 +146,20 @@ ros2 service call /task cw2_world_spawner/srv/TaskSetup "{task_index: 3}"
 
 | Value | Purpose |
 |-------|---------|
-| `0.07 m` | Maximum bounding width of a cube in the world plane (accounts for up to 45° rotation) |
 | `0.30` | Euclidean (L2-norm) colour acceptance threshold for RGB matching |
-| `0.3 m` | Maximum tolerated error between Task 2 provided coordinates and cluster-predicted coordinates |
+| `0.100 m` | Threshold to determine if a found shape is duplicate or not. A shape with a centroid within this threshold from another centroid is ignored |
+| `0.020m` | Inclusion radius from centroid that is used to define whether a shape is a cross or a nought. If points are in this radius, it is a cross |
 
 ---
 
 ## Engineering Notes
 
-### Task 1 — Pick and Place
+### Task 1, 3 — Pick and Place
 
 **Core method:** `cw2::pick_and_place(Pose obj_pose, Point basket_loc)`  
 Inputs are the cube centroid pose and the basket centre point. The method is also reused by Task 3.
 
-#### For Task 1 and the shared pick-and-place function, we spent a lot of time figuring out what worked and what didn't, and the final approach reflects quite a few lessons learned. One of the first things we settled on was using Cartesian path planning for any vertical movement, going down to grab a shape, lifting it back up, and lowering it into the basket. This keeps the gripper moving in a straight line, which matters because even a slight arc can clip the edge of a shape or drag it across the table. For the bigger horizontal movements like travelling to the basket, we use regular joint-space planning since the exact path doesn't matter as much as just getting there efficiently. We also built in a simple fail-safe throughout the whole sequence, if any individual move fails, the gripper opens and the arm goes back to home. This stops the robot from getting stuck mid-air holding a shape with no plan for what to do next.
+#### For Task 1 and 3 and the shared pick-and-place function, we spent a lot of time figuring out what worked and what didn't, and the final approach reflects quite a few lessons learned. One of the first things we settled on was using Cartesian path planning for any vertical movement, going down to grab a shape, lifting it back up, and lowering it into the basket. This keeps the gripper moving in a straight line, which matters because even a slight arc can clip the edge of a shape or drag it across the table. For the bigger horizontal movements like travelling to the basket, we use regular joint-space planning since the exact path doesn't matter as much as just getting there efficiently. We also built in a simple fail-safe throughout the whole sequence, if any individual move fails, the gripper opens and the arm goes back to home. This stops the robot from getting stuck mid-air holding a shape with no plan for what to do next.
 The detection side was probably the trickiest part. Because the depth camera is mounted on the robot's wrist, it can only see what's directly below the end effector, so we always move above the shape first before trying to detect anything. From there we run the point cloud through our pipeline — segment out the ground plane, cluster what's left, and classify each cluster using eigenvalue analysis and oriented bounding boxes. This tells us whether we're looking at a nought or a cross, what size it is, and what angle it's sitting at. That information drives everything else, the grasp offset from the shape's centre scales with size so the fingers always land on a grippable part of the wall or arm, and for noughts we rotate the gripper to match the shape's orientation so the fingers straddle the wall cleanly. Crosses don't need this rotation since their arms are symmetric.
 One issue that took us a while to track down was the gripper itself. At slow speeds, the controller would time out before the fingers fully closed, which meant only one finger would move and the shape would just get pushed sideways instead of gripped. Setting both finger joints explicitly at full speed fixed this completely. We also use the exact coordinates from the service request for the shape's position rather than the point-cloud centroid, since the camera-derived position can shift a bit depending on viewing angle, but we still rely on the point cloud for size and yaw detection, since those aren't provided by the service.
 
@@ -180,18 +179,26 @@ Descending to the exact cube centroid sometimes caused fingertips to scrape the 
 
 ---
 
-### Task 2 — Colour Identification
+### Task 1, 2, 3 — Shape and Colour Identification
 
-*See inline code comments for method-level details.*  
-The camera pipeline moves the arm to a bird's-eye position, captures a point cloud from `/r200/` and uses passthrough filtering, plane segmentation, and Euclidean clustering to isolate individual baskets. Each cluster centroid is transformed to the world frame and matched to the nearest provided basket location (within the 0.3 m tolerance). The colour is determined by comparing the mean RGB of the cluster against the three reference colours using the 0.35 Euclidean threshold. Basket locations with no associated basket are returned as `"none"`.
+The camera pipeline moves the arm to a bird's-eye position, captures a point cloud from `/r200/` and uses outlier removal, plane segmentation, and Euclidean clustering to identify shapes. Passthrough filtering in x and y was not used as the camera constantly moved to different positions. Instead, a z passthrough was used to remove clusters below the plane that were included in processing.
 
----
+#### Principal Component Analysis (PCA) for Shape Classification
+The PCL Moment of Inertia Estimator was used to obtain eigenvalues, eigenvectors, and an object-oriented bounding box (OBB) of each cluster. As our shapes had equal side dimensions, we knew we could exclude non square shapes. Therefore, if the major and middle eigenvalues did not match, we could safely exclude the shape, regardless of shape orientation. 
 
-### Task 3 — Autonomous Sort
+To identify whether a shape was a cross or a nought, the number of points within a threshold of 20mm was sampled. Crosses had central points, whereas noughts contained empty space. The number of observed points within this radius was used to define the shape. 
 
-Task 3 reuses the same PCL pipeline from Task 2 to detect both boxes and baskets, classifying each by colour. Boxes are paired with their matching-colour basket and the `pick_and_place` method is called iteratively. If no matching basket exists for a box colour, that box is skipped. If multiple baskets of a color exist, only one is used. The pipeline handles variable numbers of objects gracefully.
+To define the size, two strategies were used. Crosses were classified using the OBB, which produces a box around the shape in the shape's orientation. The width of the OBB helped identify if the cross had cell size of 20, 30, or 40mm. 
 
----
+As noughts have an added axis of symmetry across the diagonal, PCA would often return eigenvectors along the diagonal instead of edge to edge. The inconsistent behaviour of PCA made it difficult to use the OBB method to determine shape size, as a diagonal 30mm nought has the similar bounding box (212mm) as a aligned 40mm nought (200mm). Instead, the average distance of all points in a cluster was taken, and several thresholds were empirically determined to classify the shape cell size.
+
+The major eigenvector was used to obtain the yaw of a cross (as the z axis is always the minor eigenvector). The yaw was adjusted to fit within 0 and 90 degrees, as the crosses and noughts are symmetrical in 2 axes. For noughts, the closest point to the centroid was found; this was assumed to be a point on the inner edge. The vector between the centroid and the point was used to define the shape's yaw.
+
+The shape type, cell size, centroid location, and yaw serve as information for the pick and place functions in tasks 1 and 3. 
+
+#### Colour Identification
+
+The colour of a cluster was used for identifing obstacles and the basket in task 3. The average RGB of all points in the cluster were taken, from which the nearest defined colour was found.
 
 ## Package Structure
 
