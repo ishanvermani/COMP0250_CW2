@@ -32,7 +32,7 @@ static geometry_msgs::msg::Pose td_pose(double x, double y, double z, double yaw
   
   double roll = M_PI; 
   double pitch = 0.0;
-  
+
   //double yaw = -M_PI/4.0;
 
   double half_roll = roll / 2.0;
@@ -129,8 +129,8 @@ cw2::cw2(const rclcpp::Node::SharedPtr &node)
   arm_group_->setMaxVelocityScalingFactor(0.5);
   arm_group_->setMaxAccelerationScalingFactor(0.5);
 
-  hand_group_.setMaxVelocityScalingFactor(1.0);
-  hand_group_.setMaxAccelerationScalingFactor(1.0);
+  hand_group_->setMaxVelocityScalingFactor(1.0);
+  hand_group_->setMaxAccelerationScalingFactor(1.0);
 
 
   RCLCPP_INFO(node_->get_logger(), "CW2 Team 11 initialised");
@@ -261,79 +261,144 @@ void cw2::t2_callback(
   cw2::SHAPE mystery_shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
   std::vector<PointCPtr> clusters;
 
-  arm_group_->setPlanningTime(5.0);
-  arm_group_->setMaxVelocityScalingFactor(0.2);
-  arm_group_->setMaxAccelerationScalingFactor(0.2);
   
-  auto fail = [&]() {
-    open_gripper(hand_group_, L);
-    go_home(arm_group_, L);
-  };
+  static const std::string planning_group = "panda_arm";
+  moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
 
-  //Reference object 1
+  move_group2.setPlanningTime(5.0);
+  move_group2.setMaxVelocityScalingFactor(1.0);
+  move_group2.setMaxAccelerationScalingFactor(1.0);
   
-  double ox = request->ref_object_points[0].point.x;
-  double oy = request->ref_object_points[0].point.y;
-  double oz = request->ref_object_points[0].point.z + 0.5;
+  geometry_msgs::msg::Pose target_pose; // Declare target_pose here so it can be reused for all three moves (we will just update the position each time)
 
-  if (!joint_move(arm_group_, td_pose(ox, oy, oz), L, "Move A")) { fail(); return; }
+  double roll = M_PI; // 180 degrees
+  double pitch = 0.0;
+  double yaw = -M_PI / 4.0; // -45 degrees
 
-  clusters = findClusters();
+  double half_roll = roll / 2.0;
+  double half_pitch = pitch / 2.0;
+  double half_yaw = yaw / 2.0;
+
+
+  double w = std::cos(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double x = std::sin(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) - std::cos(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
+  double y = std::cos(half_roll) * std::sin(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::cos(half_pitch) * std::sin(half_yaw);
+  double z = std::cos(half_roll) * std::cos(half_pitch) * std::sin(half_yaw) - std::sin(half_roll) * std::sin(half_pitch) * std::cos(half_yaw);
+ 
+  target_pose.orientation.x = x; 
+  target_pose.orientation.y = y;
+  target_pose.orientation.z = z;
+  target_pose.orientation.w = w;  
+
+    //Reference object 1
   
-  for (size_t i = 0; i < clusters.size(); i++)
+  target_pose.position.x = request->ref_object_points[0].point.x;
+  target_pose.position.y = request->ref_object_points[0].point.y;
+  target_pose.position.z = request->ref_object_points[0].point.z + 0.5;
+  move_group2.setPoseTarget(target_pose);
+  moveit::planning_interface::MoveGroupInterface::Plan plan1;
+
+  if(move_group2.plan(plan1) == moveit::core::MoveItErrorCode::SUCCESS)
   {
-    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+    move_group2.execute(plan1);
 
-    reference_shape_1 = classifyShape(clusters[i]);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+
+    clusters = findClusters();
     
-    if (reference_shape_1.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_1.size != cw2::SHAPE_SIZE::UNKNOWN) 
+    for (size_t i = 0; i < clusters.size(); i++)
     {
-      break; 
+      RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+
+      reference_shape_1 = classifyShape(clusters[i]);
+      
+      if (reference_shape_1.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_1.size != cw2::SHAPE_SIZE::UNKNOWN) 
+      {
+        break; 
+      }
     }
+
   }
+  else
+  {
+    RCLCPP_WARN(L, "Error moving to reference shape 1");
+    return;
+  }
+  
 
   
   //Reference object 2
-  ox = request->ref_object_points[1].point.x;
-  oy = request->ref_object_points[1].point.y;
-  oz = request->ref_object_points[1].point.z + 0.5;
+  target_pose.position.x = request->ref_object_points[1].point.x;
+  target_pose.position.y = request->ref_object_points[1].point.y;
+  target_pose.position.z = request->ref_object_points[1].point.z + 0.5;
 
-  if (!joint_move(arm_group_, td_pose(ox, oy, oz), L, "Move B")) { fail(); return; }
+  move_group2.setPoseTarget(target_pose);
+  moveit::planning_interface::MoveGroupInterface::Plan plan2;
 
-  clusters = findClusters();
-  
-  for (size_t i = 0; i < clusters.size(); i++)
+  if(move_group2.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS)
   {
-    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+    move_group2.execute(plan2);
+ 
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  
 
-    reference_shape_2 = classifyShape(clusters[i]);
+    clusters = findClusters();
     
-    if (reference_shape_2.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_2.size != cw2::SHAPE_SIZE::UNKNOWN) 
+    for (size_t i = 0; i < clusters.size(); i++)
     {
-      break; 
+      RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+
+      reference_shape_2 = classifyShape(clusters[i]);
+      
+      if (reference_shape_2.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_2.size != cw2::SHAPE_SIZE::UNKNOWN) 
+      {
+        break; 
+      }
     }
+
+  }
+  else
+  {
+    RCLCPP_WARN(L, "Error moving to reference shape 2");
+    return;
   }
 
 
   //Mystery object
-  ox = request->ref_object_points[2].point.x;
-  oy = request->ref_object_points[2].point.y;
-  oz = request->ref_object_points[2].point.z + 0.5;
+  target_pose.position.x = request->mystery_object_point.point.x;
+  target_pose.position.y = request->mystery_object_point.point.y;
+  target_pose.position.z = request->mystery_object_point.point.z + 0.5;
 
-  if (!joint_move(arm_group_, td_pose(ox, oy, oz), L, "Move C")) { fail(); return; }
+  move_group2.setPoseTarget(target_pose);
+  moveit::planning_interface::MoveGroupInterface::Plan plan3;
 
-  clusters = findClusters();
-  
-  for (size_t i = 0; i < clusters.size(); i++)
+  if(move_group2.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS)
   {
-    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+    move_group2.execute(plan3);
 
-    mystery_shape = classifyShape(clusters[i]);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+
+    clusters = findClusters();
     
-    if (mystery_shape.type != cw2::SHAPE_TYPE::UNKNOWN && mystery_shape.size != cw2::SHAPE_SIZE::UNKNOWN) 
+    for (size_t i = 0; i < clusters.size(); i++)
     {
-      break; 
+      RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+
+      mystery_shape = classifyShape(clusters[i]);
+      
+      if (mystery_shape.type != cw2::SHAPE_TYPE::UNKNOWN && mystery_shape.size != cw2::SHAPE_SIZE::UNKNOWN) 
+      {
+        break; 
+      }
     }
+
+  }
+  else
+  {
+    RCLCPP_WARN(L, "Error moving to mystery shape");
+    return;
   }
 
 
@@ -369,7 +434,6 @@ void cw2::t2_callback(
   
   
 }
-
 
 void cw2::t3_callback(
   const std::shared_ptr<cw2_world_spawner::srv::Task3Service::Request> request,
@@ -543,7 +607,7 @@ void cw2::t3_callback(
   basket_location.z() = basket_location.z() - 0.050; // subtract 5cm of basket height
 
 
-  pick_and_place_shape(shape_to_pick, basket_location.x(), basket_lcation.y(), basket_location.z());
+  pick_and_place_shape(shape_to_pick, basket_location.x(), basket_location.y(), basket_location.z());
 
   RCLCPP_INFO(L, "=== Task 3 complete ===");
   
@@ -557,23 +621,44 @@ void cw2::t3_callback(
 ///////////////////////////////////////////////////////////////////////////////
 
 bool cw2::pick_and_place_shape(
-  const cw2::SHAPE &shape
-  double target_x, double target_y, double target_z,
+  const cw2::SHAPE &shape,
+  double target_x, double target_y, double target_z
   )
 {
   auto L = node_->get_logger();
   double cell_m = static_cast<float>(shape.size) / 1000.0;
 
   double shape_yaw_rad = shape.yaw * (M_PI / 180.0);
+  double gripper_yaw = shape_yaw_rad - M_PI/4.0;
 
   double gx_pick = shape.centroid.x();
   double gy_pick = shape.centroid.y();
   double gx_drop = target_x;
   double gy_drop = target_y;
 
-  double grip_z = shape.centroid.z() 0.15; //- 0.040 + 0.125;
+  double grip_z = shape.centroid.z() +0.15; //- 0.040 + 0.125;
   double basket_z = target_z + 0.35; //-0.050 + 0.35;
   double safe_z = shape.centroid.z() + 0.65;
+
+  double ox = shape.centroid.x ();
+  double oy = shape.centroid.y();
+  double gx = target_x;
+  double gy = target_y; 
+
+  moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
+  hand_group.setMaxVelocityScalingFactor(1.0);
+  hand_group.setMaxAccelerationScalingFactor(1.0);
+  auto fail = [&]() {
+  open_gripper(hand_group_, L);
+  //go_home(arm_group_, L);
+  };
+
+  // Move 1
+  RCLCPP_INFO(L, "Move A: Moving high above shape");
+  if (!joint_move(arm_group_, td_pose(ox, oy, safe_z), L, "Move A")) { fail(); return false; }
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  if (!open_gripper(hand_group_, L)) { fail(); return false; }
 
   // Pickup offsets for each scenario
 
@@ -621,11 +706,12 @@ bool cw2::pick_and_place_shape(
     
   }
   
+
   // Move 2
   RCLCPP_INFO(L, "Move B: Descending to grip");
   arm_group_->setMaxVelocityScalingFactor(0.1);
   arm_group_->setMaxAccelerationScalingFactor(0.1);
-  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, grip_z), L, "Move B")) { fail(); return false; }
+  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, grip_z, gripper_yaw), L, "Move B")) { fail(); return false; }
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
 
@@ -637,13 +723,13 @@ bool cw2::pick_and_place_shape(
   }
   else 
   {
-    RCLCPP_INFO(L, "Move C: Closing gripper");
-    hand_group_->setJointValueTarget("panda_finger_joint1", 0.020); 
-    moveit::planning_interface::MoveGroupInterface::Plan close_plan;
 
-    if (!hand_group_->plan(close_plan) == moveit::core::MoveItErrorCode::SUCCESS) {fail(); return false;}
-    hand_group_->execute(close_plan);
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  RCLCPP_INFO(L, "Move C: Closing gripper");
+  hand_group.setJointValueTarget("panda_finger_joint1", 0.020); 
+  moveit::planning_interface::MoveGroupInterface::Plan close_plan;
+  hand_group.plan(close_plan) == moveit::core::MoveItErrorCode::SUCCESS;
+  hand_group.execute(close_plan);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   }
 
@@ -651,7 +737,7 @@ bool cw2::pick_and_place_shape(
   RCLCPP_INFO(L, "Move D: Lifting object to safe height");
   arm_group_->setMaxVelocityScalingFactor(0.5);
   arm_group_->setMaxAccelerationScalingFactor(0.5);
-  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, safe_z), L, "Move D")) { fail(); return false; }
+  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, safe_z, gripper_yaw), L, "Move D")) { fail(); return false; }
 
   //Move 5
   RCLCPP_INFO(L, "Move E: Translating over obstacles to basket");
@@ -665,8 +751,8 @@ bool cw2::pick_and_place_shape(
   RCLCPP_INFO(L, "Releasing Item!");
   hand_group_->setNamedTarget("open");
   moveit::planning_interface::MoveGroupInterface::Plan final_open_plan;
-  if (!hand_group->plan(final_open_plan) == moveit::core::MoveItErrorCode::SUCCESS) { fail(); return false; }
-  hand_group->execute(final_open_plan);
+  if (!hand_group_->plan(final_open_plan) == moveit::core::MoveItErrorCode::SUCCESS) { fail(); return false; }
+  hand_group_->execute(final_open_plan);
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
   //Move 8
@@ -685,7 +771,7 @@ bool cw2::pick_and_place_shape(
 bool cw2::joint_move(
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
   const geometry_msgs::msg::Pose &t, const rclcpp::Logger &l,
-  const std::string &d, int n = 5)
+  const std::string &d, int n)
 {
   m->setPoseTarget(t);
   for (int a = 1; a <= n; ++a) {
@@ -715,7 +801,7 @@ bool cw2::cart_move(
   return joint_move(m, t, l, d);
 }
 
-bool open_gripper(
+bool cw2::open_gripper(
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &h,
   const rclcpp::Logger &l)
 {
@@ -737,7 +823,7 @@ bool open_gripper(
 void cw2::strong_grip(
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &h,
   const rclcpp::Logger &l,
-  int cell_size_mm = 40)
+  int cell_size_mm)
 {
   // Target = arm_half - 10mm squeeze. Maximum force for small shapes.
   //   x=40 → target=0.010, squeeze=10mm
