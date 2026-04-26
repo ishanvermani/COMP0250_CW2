@@ -121,8 +121,8 @@ static void strong_grip(
   
   // FULL SPEED grip — slow speed (0.05) causes controller timeout
   // before fingers close enough on small shapes. CW1 used 1.0.
-  h->setMaxVelocityScalingFactor(1.0);
-  h->setMaxAccelerationScalingFactor(1.0);
+  h->setMaxVelocityScalingFactor(0.1);
+  h->setMaxAccelerationScalingFactor(0.1);
   RCLCPP_INFO(l, "  GRIP (size=%dmm, target=%.4f, squeeze=8mm)", cell_size_mm, target);
   
   h->setJointValueTarget("panda_finger_joint1", target);
@@ -461,18 +461,62 @@ void cw2::t1_callback(
   double gx_drop = gx;
   double gy_drop = gy;
 
-  if (shape == "nought") {
+  // if (shape == "nought") {
+  //   RCLCPP_INFO(L, "Applying nought offsets");
+  //   gx_pick = ox + 0.08 * std::sin(shape_yaw_rad);
+  //   gy_pick = oy - 0.08 * std::cos(shape_yaw_rad);
+  //   gx_drop = gx;
+  //   gy_drop = gy - 0.05;
+  // } else {
+  //   RCLCPP_INFO(L, "Applying cross offsets");
+  //   gx_pick = ox + 0.05 * std::cos(shape_yaw_rad);
+  //   gy_pick = oy + 0.05 * std::sin(shape_yaw_rad);
+  //   gx_drop = gx + 0.02;
+  //   gy_drop = gy;
+  // }
+
+  if (t1_shape.type == cw2::SHAPE_TYPE::NOUGHT) {
+    if (t1_shape.size == cw2::SHAPE_SIZE::MM_40){
     RCLCPP_INFO(L, "Applying nought offsets");
     gx_pick = ox + 0.08 * std::sin(shape_yaw_rad);
     gy_pick = oy - 0.08 * std::cos(shape_yaw_rad);
     gx_drop = gx;
     gy_drop = gy - 0.05;
+    } else if (t1_shape.size == cw2::SHAPE_SIZE::MM_30){
+    RCLCPP_INFO(L, "Applying nought offsets");
+    gx_pick = ox + 0.06 * std::sin(shape_yaw_rad);
+    gy_pick = oy - 0.06 * std::cos(shape_yaw_rad);
+    gx_drop = gx;
+    gy_drop = gy - 0.05;
+    } else if (t1_shape.size == cw2::SHAPE_SIZE::MM_20){
+      RCLCPP_INFO(L, "Applying nought offsets");
+    gx_pick = ox + 0.05 * std::sin(shape_yaw_rad);
+    gy_pick = oy - 0.05 * std::cos(shape_yaw_rad);
+    gx_drop = gx;
+    gy_drop = gy - 0.05;
+    }
   } else {
+    if (t1_shape.size == cw2::SHAPE_SIZE::MM_40){
     RCLCPP_INFO(L, "Applying cross offsets");
     gx_pick = ox + 0.05 * std::cos(shape_yaw_rad);
     gy_pick = oy + 0.05 * std::sin(shape_yaw_rad);
     gx_drop = gx + 0.02;
     gy_drop = gy;
+    } else if (t1_shape.size == cw2::SHAPE_SIZE::MM_30){
+    RCLCPP_INFO(L, "Applying cross offsets");
+    gx_pick = ox + 0.04 * std::cos(shape_yaw_rad);
+    gy_pick = oy + 0.04 * std::sin(shape_yaw_rad);
+    gx_drop = gx + 0.02;
+    gy_drop = gy;
+    } else {
+      RCLCPP_INFO(L, "Applying cross offsets");
+    gx_pick = ox + 0.037 * std::cos(shape_yaw_rad);
+    gy_pick = oy + 0.037 * std::sin(shape_yaw_rad);
+    gx_drop = gx + 0.02;
+    gy_drop = gy;
+    }
+
+    
   }
   
 
@@ -486,16 +530,21 @@ void cw2::t1_callback(
   //Move 3
 
   //OLD GRIP//
-  // RCLCPP_INFO(L, "Move C: Closing gripper. I WANT THE BIG BUNNY");
-  // strong_grip(hand_group_, L, 40);  // Task 1 always x=40mm
+
+  if (t1_shape.size == cw2::SHAPE_SIZE::MM_20 and t1_shape.type == cw2::SHAPE_TYPE::CROSS){
+  RCLCPP_INFO(L, "Move C: Closing gripper. I WANT THE BIG BUNNY");
+  strong_grip(hand_group_, L, 40);
+}
+  else {
 
    //I think this grip works faster
   RCLCPP_INFO(L, "Closing gripper. TOUT TOUT TOUT. I WANT THE BIG BUNNY");
   hand_group.setJointValueTarget("panda_finger_joint1", 0.020); 
   moveit::planning_interface::MoveGroupInterface::Plan close_plan;
-  bool success = (hand_group.plan(close_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  hand_group.plan(close_plan) == moveit::core::MoveItErrorCode::SUCCESS;
   hand_group.execute(close_plan);
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
+}
 
   //Move 4
   RCLCPP_INFO(L, "Move D: Lifting object to safe height");
@@ -511,7 +560,7 @@ void cw2::t1_callback(
 
   //Move 6
   RCLCPP_INFO(L, "Move F: Descending into basket");
-   if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, basket_z), L, "Move F")) { fail(); return; }
+  if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, basket_z), L, "Move F")) { fail(); return; }
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   
@@ -536,19 +585,20 @@ void cw2::t1_callback(
   RCLCPP_INFO(L, "KOBE!");
   hand_group.setNamedTarget("open");
   moveit::planning_interface::MoveGroupInterface::Plan final_open_plan;
-  success = (hand_group.plan(final_open_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  hand_group.plan(final_open_plan) == moveit::core::MoveItErrorCode::SUCCESS;
   hand_group.execute(final_open_plan);
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-  // RCLCPP_INFO(L, "Move E: Translating over obstacles to basket");
-  // if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move E")) { fail(); return; }
-  // std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   //Move 8
+  RCLCPP_INFO(L, "Move F: Ascending above basket");
+  if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move F")) { fail(); return; }
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  //Move 9
   RCLCPP_INFO(L, "Returning to 'ready' home position...");
   go_home(arm_group_, L);
   std::this_thread::sleep_for(std::chrono::milliseconds(500)); 
-
 
 
   RCLCPP_INFO(L, "=== Task 1 complete ===");
@@ -831,7 +881,7 @@ void cw2::t3_callback(
     // if(move_group3.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS)
     // {
     //   move_group3.execute(plan);
-    if (joint_move(arm_group_, target_pose, L, "Scanning Move"))
+    if (cart_move(arm_group_, target_pose, L, "Scanning Move"))
     {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
@@ -934,6 +984,16 @@ void cw2::t3_callback(
       shape_to_pick = noughts.front();
     }
 
+    for (const auto& pt : noughts) {
+      RCLCPP_INFO(L, "Nought at {%.2f, %.2f, %.2f}", pt.centroid.x(), pt.centroid.y(), pt.centroid.z());
+    }
+
+    for (const auto& pt : crosses) {
+      RCLCPP_INFO(L, "Cross at {%.2f, %.2f, %.2f}", pt.centroid.x(), pt.centroid.y(), pt.centroid.z());
+    }
+
+
+
   double grip_z = shape_to_pick.centroid.z() - 0.040 + 0.125;
   double basket_z = basket_location.z() -0.050 + 0.35;
   double safe_z = shape_to_pick.centroid.z() + 0.65;
@@ -941,6 +1001,9 @@ void cw2::t3_callback(
   double oy = shape_to_pick.centroid.y();
   double gx = basket_location.x();
   double gy  = basket_location.y();
+
+
+
 
   moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
   hand_group.setMaxVelocityScalingFactor(1.0);
@@ -986,8 +1049,8 @@ void cw2::t3_callback(
     gy_drop = gy - 0.05;
     } else if (shape_to_pick.size == cw2::SHAPE_SIZE::MM_20){
       RCLCPP_INFO(L, "Applying nought offsets");
-    gx_pick = ox + 0.04 * std::sin(shape_yaw_rad);
-    gy_pick = oy - 0.04 * std::cos(shape_yaw_rad);
+    gx_pick = ox + 0.05 * std::sin(shape_yaw_rad);
+    gy_pick = oy - 0.05 * std::cos(shape_yaw_rad);
     gx_drop = gx;
     gy_drop = gy - 0.05;
     }
@@ -1006,8 +1069,8 @@ void cw2::t3_callback(
     gy_drop = gy;
     } else {
       RCLCPP_INFO(L, "Applying cross offsets");
-    gx_pick = ox + 0.02 * std::cos(shape_yaw_rad);
-    gy_pick = oy + 0.02 * std::sin(shape_yaw_rad);
+    gx_pick = ox + 0.0125 * std::cos(shape_yaw_rad);
+    gy_pick = oy + 0.0125 * std::sin(shape_yaw_rad);
     gx_drop = gx + 0.02;
     gy_drop = gy;
     }
@@ -1084,7 +1147,13 @@ void cw2::t3_callback(
   // if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move E")) { fail(); return; }
   // std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
+
   //Move 8
+  RCLCPP_INFO(L, "Move F: Ascending above basket (Oogway ascends!)");
+  if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move F")) { fail(); return; }
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  //Move 9
   RCLCPP_INFO(L, "Returning to 'ready' home position...");
   go_home(arm_group_, L);
   std::this_thread::sleep_for(std::chrono::milliseconds(500)); 
