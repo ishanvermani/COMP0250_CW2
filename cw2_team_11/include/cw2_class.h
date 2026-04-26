@@ -105,6 +105,36 @@ public:
     std::shared_ptr<cw2_world_spawner::srv::Task3Service::Response> response);
 
   void cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
+
+  // Moveit Functions
+  // Reusable pick-and-place for any shape size (x = 20, 30, or 40mm)
+  bool pick_and_place_shape(const cw2::SHAPE &shape, double target_x, double target_y, double target_z);
+
+  bool joint_move(
+    std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
+    const geometry_msgs::msg::Pose &t, const rclcpp::Logger &l,
+    const std::string &d, int n = 5);
+
+  bool cart_move(
+    std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
+    const geometry_msgs::msg::Pose &t, const rclcpp::Logger &l,
+    const std::string &d);
+
+  bool open_gripper(
+    std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &h,
+    const rclcpp::Logger &l);
+
+  void strong_grip(
+    std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &h,
+    const rclcpp::Logger &l,
+    int cell_size_mm = 40);
+
+  bool go_home(
+    std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
+    const rclcpp::Logger &l);
+    
+  //PCL functions
+
   void rosTopicToCloud(const sensor_msgs::msg::PointCloud2::ConstSharedPtr cloud_input_msg);
 
   void applyVoxelGrid(double leaf_size);
@@ -115,7 +145,6 @@ public:
   std::vector<PointCPtr> extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
   void pubFilteredPCMsg(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub, PointC &pc, const std_msgs::msg::Header &header);
-  void processCloud();
   Eigen::Vector3f getCentroid(PointCPtr &in_cloud_ptr);
   std::string colorOfPointCloud(PointC &in_cloud_ptr, float threshold);
   void filteringPipeline();
@@ -125,11 +154,7 @@ public:
 
 
 
-  // Reusable pick-and-place for any shape size (x = 20, 30, or 40mm)
-  bool pick_and_place_shape(double ox, double oy,
-                            double bx, double by, double bz,
-                            const SHAPE &shape);
-
+  
   // VARIABLE DEFINITION
 
   rclcpp::Node::SharedPtr node_;

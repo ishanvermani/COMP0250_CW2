@@ -55,105 +55,6 @@ static geometry_msgs::msg::Pose td_pose(double x, double y, double z, double yaw
 
 static inline double ft2l8(double z) { return z + FTIP; }
 
-static bool joint_move(
-  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
-  const geometry_msgs::msg::Pose &t, const rclcpp::Logger &l,
-  const std::string &d, int n = 5)
-{
-  m->setPoseTarget(t);
-  for (int a = 1; a <= n; ++a) {
-    moveit::planning_interface::MoveGroupInterface::Plan p;
-    if (m->plan(p) != moveit::core::MoveItErrorCode::SUCCESS) {
-      RCLCPP_WARN(l, "%s: plan %d/%d", d.c_str(), a, n); continue;
-    }
-    if (m->execute(p) == moveit::core::MoveItErrorCode::SUCCESS) {
-      RCLCPP_INFO(l, "%s: OK", d.c_str()); return true;
-    }
-  }
-  RCLCPP_ERROR(l, "%s: FAIL", d.c_str()); return false;
-}
-
-static bool cart_move(
-  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
-  const geometry_msgs::msg::Pose &t, const rclcpp::Logger &l,
-  const std::string &d)
-{
-  std::vector<geometry_msgs::msg::Pose> w = {t};
-  moveit_msgs::msg::RobotTrajectory tr;
-  double f = m->computeCartesianPath(w, 0.005, 0.0, tr);
-  if (f >= 0.90 && m->execute(tr) == moveit::core::MoveItErrorCode::SUCCESS) {
-    RCLCPP_INFO(l, "%s: Cart OK (%.0f%%)", d.c_str(), f * 100); return true;
-  }
-  RCLCPP_WARN(l, "%s: Cart %.0f%%, joint fallback", d.c_str(), f * 100);
-  return joint_move(m, t, l, d);
-}
-
-static bool open_gripper(
-  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &h,
-  const rclcpp::Logger &l)
-{
-  h->setNamedTarget("open");
-  moveit::planning_interface::MoveGroupInterface::Plan p;
-
-  if (h->plan(p) != moveit::core::MoveItErrorCode::SUCCESS) return false;
-  if (h->execute(p) != moveit::core::MoveItErrorCode::SUCCESS) return false;
-  RCLCPP_INFO(l, "Gripper OPEN"); return true;
-}
-
-// Grip with force scaled to shape size.
-// cell_size_mm: arm width of the shape (20, 30, or 40).
-// Target = (arm_half - 5mm) so there's always 5mm of squeeze.
-//   x=40 → target=0.015, squeeze=5mm ✓
-//   x=30 → target=0.010, squeeze=5mm ✓
-//   x=20 → target=0.005, squeeze=5mm ✓
-// Without scaling, x=20 shapes get PUSHED OUT (target > shape width)
-static void strong_grip(
-  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &h,
-  const rclcpp::Logger &l,
-  int cell_size_mm = 40)
-{
-  // Target = arm_half - 10mm squeeze. Maximum force for small shapes.
-  //   x=40 → target=0.010, squeeze=10mm
-  //   x=30 → target=0.005, squeeze=10mm
-  //   x=20 → target=0.001, squeeze=9mm (nearly fully closed)
-  double arm_half_m = (cell_size_mm / 2.0) / 1000.0;
-  double target = std::max(0.001, arm_half_m - 0.010);
-  
-  // FULL SPEED grip — slow speed (0.05) causes controller timeout
-  // before fingers close enough on small shapes. CW1 used 1.0.
-  h->setMaxVelocityScalingFactor(0.1);
-  h->setMaxAccelerationScalingFactor(0.1);
-  RCLCPP_INFO(l, "  GRIP (size=%dmm, target=%.4f, squeeze=8mm)", cell_size_mm, target);
-  
-  h->setJointValueTarget("panda_finger_joint1", target);
-  h->setJointValueTarget("panda_finger_joint2", target);
-  
-  moveit::planning_interface::MoveGroupInterface::Plan p;
-  if (h->plan(p) != moveit::core::MoveItErrorCode::SUCCESS) {
-    RCLCPP_WARN(l, "  Grip plan failed"); return;
-  }
-  h->execute(p);
-  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-  RCLCPP_INFO(l, "  Grip applied");
-}
-
-static bool go_home(
-  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
-  const rclcpp::Logger &l)
-{
-  m->setNamedTarget("ready");
-  for (int a = 1; a <= 5; ++a) {
-    moveit::planning_interface::MoveGroupInterface::Plan p;
-    if (m->plan(p) != moveit::core::MoveItErrorCode::SUCCESS) continue;
-    if (m->execute(p) == moveit::core::MoveItErrorCode::SUCCESS) {
-      RCLCPP_INFO(l, "Home OK"); return true;
-    }
-  }
-  RCLCPP_ERROR(l, "Home FAIL"); return false;
-}
-
-
-
 cw2::cw2(const rclcpp::Node::SharedPtr &node)
 : node_(node),
   tf_buffer_(node->get_clock()),
@@ -222,12 +123,15 @@ cw2::cw2(const rclcpp::Node::SharedPtr &node)
 
   arm_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(node_, "panda_arm");
   hand_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(node_, "hand");
-
   
   arm_group_->setPlanningTime(10.0);
   arm_group_->setNumPlanningAttempts(10);
   arm_group_->setMaxVelocityScalingFactor(0.5);
   arm_group_->setMaxAccelerationScalingFactor(0.5);
+
+  hand_group_.setMaxVelocityScalingFactor(1.0);
+  hand_group_.setMaxAccelerationScalingFactor(1.0);
+
 
   RCLCPP_INFO(node_->get_logger(), "CW2 Team 11 initialised");
 }
@@ -251,108 +155,6 @@ void cw2::cloud_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg
 
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// Reusable pick-and-place for ANY shape size (x = 20, 30, or 40mm)
-// Offsets and grip force scale automatically with cell_size_mm.
-///////////////////////////////////////////////////////////////////////////////
-
-bool cw2::pick_and_place_shape(
-  double ox, double oy,
-  double bx, double by, double bz,
-  const cw2::SHAPE &shape)
-{
-  auto L = node_->get_logger();
-  double cell_m = static_cast<float>(shape.size) / 1000.0;
-
-  // Scale grasp offset with cell size.
-  // nought: 2.0 * cell = exact center of the side wall. 
-  //   The side is 1 cell thick at 2*cell from center.
-  //   x=40 → 80mm, x=30 → 60mm, x=20 → 40mm (all centered on wall)
-  // cross:  1.0 * cell = first arm cell from center (secure, away from intersection)
-  double px = ox, py = oy;
-  if (shape.type == cw2::SHAPE_TYPE::NOUGHT) {
-    py = oy - 2.0 * cell_m;
-  } else {
-    px = ox + 1.0 * cell_m;
-  }
-
-  // Drop offsets (small, just to clear basket rim)
-  double dx = bx, dy = by;
-  if (shape.type == cw2::SHAPE_TYPE::NOUGHT) {
-    dy = by - 1.5 * cell_m;
-  } else {
-    dx = bx + 0.5 * cell_m;
-  }
-
-  RCLCPP_INFO(L, "pick_and_place: shape=%d size=%dmm grasp=(%.3f,%.3f) drop=(%.3f,%.3f)",
-              static_cast<int>(shape.type), static_cast<int>(shape.size), px, py, dx, dy);
-
-  // Heights — shape is ALWAYS 40mm tall regardless of cell size
-  double grip_z   = 0.020 + 0.15;
-  double safe_z   = 0.020 + 0.65;
-  double basket_z = bz + 0.35;
-
-  auto fail = [&]() { open_gripper(hand_group_, L); go_home(arm_group_, L); };
-
-  go_home(arm_group_, L);
-
-  // Move A: high above shape
-  RCLCPP_INFO(L, "Move A: Above shape");
-  if (!joint_move(arm_group_, td_pose(px, py, safe_z), L, "Above shape")) { fail(); return false; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-  if (!open_gripper(hand_group_, L)) { fail(); return false; }
-
-  // double shape_yaw_rad = t1_shape.yaw * (M_PI / 180.0);
-
-  // Move B: descend to grip
-  RCLCPP_INFO(L, "Move B: Descend");
-  arm_group_->setMaxVelocityScalingFactor(0.1);
-  arm_group_->setMaxAccelerationScalingFactor(0.1);
-  if (!cart_move(arm_group_, td_pose(px, py, grip_z), L, "Descend")) { fail(); return false; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-  // Move C: grip (scaled to shape size!)
-  RCLCPP_INFO(L, "Move C: Grip (size=%dmm)", static_cast<int>(shape.size));
-  strong_grip(hand_group_, L, static_cast<int>(shape.size));
-
- 
-  // Move D: lift
-  RCLCPP_INFO(L, "Move D: Lift");
-  arm_group_->setMaxVelocityScalingFactor(0.5);
-  arm_group_->setMaxAccelerationScalingFactor(0.5);
-  if (!cart_move(arm_group_, td_pose(px, py, safe_z), L, "Lift")) { fail(); return false; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-  // Move E: above basket
-  RCLCPP_INFO(L, "Move E: Above basket");
-  if (!joint_move(arm_group_, td_pose(dx, dy, safe_z), L, "Above basket")) { fail(); return false; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-  // Move F: lower into basket
-  RCLCPP_INFO(L, "Move F: Lower");
-  if (!cart_move(arm_group_, td_pose(dx, dy, basket_z), L, "Lower")) { fail(); return false; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-  // Move G: release
-  RCLCPP_INFO(L, "Move G: Release");
-  moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
-  hand_group.setMaxVelocityScalingFactor(1.0);
-  hand_group.setMaxAccelerationScalingFactor(1.0);
-  hand_group.setNamedTarget("open");
-  moveit::planning_interface::MoveGroupInterface::Plan hp;
-  hand_group.plan(hp);
-  hand_group.execute(hp);
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-  // Move H: retreat
-  RCLCPP_INFO(L, "Move H: Retreat");
-  if (!joint_move(arm_group_, td_pose(dx, dy, safe_z), L, "Retreat")) { fail(); return false; }
-  go_home(arm_group_, L);
-
-  RCLCPP_INFO(L, "pick_and_place: DONE");
-  return true;
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Task 1: Pick and Place
@@ -395,29 +197,11 @@ void cw2::t1_callback(
   RCLCPP_INFO(L, "Shape: %s at (%.4f, %.4f, %.4f) [world]", shape.c_str(), ox, oy, oz);
   RCLCPP_INFO(L, "Basket at (%.4f, %.4f, %.4f) [world]", gx, gy, gz);
 
-  // double gx_pick, gy_pick;
-  // double gx_drop, gy_drop;
-
-  
-
-  // const double shape_centroid_z = 0.020;           
-  // const double grasp_l8     = ft2l8(shape_centroid_z + 0.015); 
-  // const double pre_grasp_l8 = grasp_l8 + 0.085;    
-  // const double transit_l8   = 0.40;                 
-  // const double release_l8   = ft2l8(gz + 0.10);  
-
-  
-
-  // RCLCPP_INFO(L, "Heights: grasp_l8=%.4f pre_grasp=%.4f transit=%.4f release=%.4f",
-  //             grasp_l8, pre_grasp_l8, transit_l8, release_l8);
 
   double grip_z = request->object_point.point.z + 0.15;
   double basket_z = request->goal_point.point.z + 0.35;
   double safe_z = request->object_point.point.z + 0.65;
 
-  moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
-  hand_group.setMaxVelocityScalingFactor(1.0);
-  hand_group.setMaxAccelerationScalingFactor(1.0);
 
   auto fail = [&]() {
     open_gripper(hand_group_, L);
@@ -426,7 +210,9 @@ void cw2::t1_callback(
 
   
   go_home(arm_group_, L);
-  // Move 1
+
+
+  // Move to shape
   RCLCPP_INFO(L, "Move A: Moving high above shape");
   if (!joint_move(arm_group_, td_pose(ox, oy, safe_z), L, "Move A")) { fail(); return; }
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -443,163 +229,15 @@ void cw2::t1_callback(
   {
     RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
     t1_shape = classifyShape(clusters[i]);
-    if(t1_shape.type == cw2::SHAPE_TYPE::UNKNOWN || t1_shape.size == cw2::SHAPE_SIZE::UNKNOWN)
+    if(t1_shape.type != cw2::SHAPE_TYPE::UNKNOWN && t1_shape.size != cw2::SHAPE_SIZE::UNKNOWN)
     {
-      continue;
+      break;
     }
   }
 
-  //
-  // USE t1_shape.yaw FOR YAW!!
-  //
+  t1_shape.centroid = Eigen::Vector3f(ox, oy, oz);
 
-  double shape_yaw_rad = t1_shape.yaw * (M_PI / 180.0);
-  double gripper_yaw = shape_yaw_rad - M_PI/4.0;
-
-  double gx_pick = ox;
-  double gy_pick = oy;
-  double gx_drop = gx;
-  double gy_drop = gy;
-
-  // if (shape == "nought") {
-  //   RCLCPP_INFO(L, "Applying nought offsets");
-  //   gx_pick = ox + 0.08 * std::sin(shape_yaw_rad);
-  //   gy_pick = oy - 0.08 * std::cos(shape_yaw_rad);
-  //   gx_drop = gx;
-  //   gy_drop = gy - 0.05;
-  // } else {
-  //   RCLCPP_INFO(L, "Applying cross offsets");
-  //   gx_pick = ox + 0.05 * std::cos(shape_yaw_rad);
-  //   gy_pick = oy + 0.05 * std::sin(shape_yaw_rad);
-  //   gx_drop = gx + 0.02;
-  //   gy_drop = gy;
-  // }
-
-  if (t1_shape.type == cw2::SHAPE_TYPE::NOUGHT) {
-    if (t1_shape.size == cw2::SHAPE_SIZE::MM_40){
-    RCLCPP_INFO(L, "Applying nought offsets");
-    gx_pick = ox + 0.08 * std::sin(shape_yaw_rad);
-    gy_pick = oy - 0.08 * std::cos(shape_yaw_rad);
-    gx_drop = gx;
-    gy_drop = gy - 0.05;
-    } else if (t1_shape.size == cw2::SHAPE_SIZE::MM_30){
-    RCLCPP_INFO(L, "Applying nought offsets");
-    gx_pick = ox + 0.06 * std::sin(shape_yaw_rad);
-    gy_pick = oy - 0.06 * std::cos(shape_yaw_rad);
-    gx_drop = gx;
-    gy_drop = gy - 0.05;
-    } else if (t1_shape.size == cw2::SHAPE_SIZE::MM_20){
-      RCLCPP_INFO(L, "Applying nought offsets");
-    gx_pick = ox + 0.05 * std::sin(shape_yaw_rad);
-    gy_pick = oy - 0.05 * std::cos(shape_yaw_rad);
-    gx_drop = gx;
-    gy_drop = gy - 0.05;
-    }
-  } else {
-    if (t1_shape.size == cw2::SHAPE_SIZE::MM_40){
-    RCLCPP_INFO(L, "Applying cross offsets");
-    gx_pick = ox + 0.05 * std::cos(shape_yaw_rad);
-    gy_pick = oy + 0.05 * std::sin(shape_yaw_rad);
-    gx_drop = gx + 0.02;
-    gy_drop = gy;
-    } else if (t1_shape.size == cw2::SHAPE_SIZE::MM_30){
-    RCLCPP_INFO(L, "Applying cross offsets");
-    gx_pick = ox + 0.04 * std::cos(shape_yaw_rad);
-    gy_pick = oy + 0.04 * std::sin(shape_yaw_rad);
-    gx_drop = gx + 0.02;
-    gy_drop = gy;
-    } else {
-      RCLCPP_INFO(L, "Applying cross offsets");
-    gx_pick = ox + 0.037 * std::cos(shape_yaw_rad);
-    gy_pick = oy + 0.037 * std::sin(shape_yaw_rad);
-    gx_drop = gx + 0.02;
-    gy_drop = gy;
-    }
-
-    
-  }
-  
-
-  // Move 2
-  RCLCPP_INFO(L, "Move B: Descending to grip");
-  arm_group_->setMaxVelocityScalingFactor(0.1);
-  arm_group_->setMaxAccelerationScalingFactor(0.1);
-  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, grip_z, gripper_yaw), L, "Move B")) { fail(); return; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-  //Move 3
-
-  //OLD GRIP//
-
-  if (t1_shape.size == cw2::SHAPE_SIZE::MM_20 and t1_shape.type == cw2::SHAPE_TYPE::CROSS){
-  RCLCPP_INFO(L, "Move C: Closing gripper. I WANT THE BIG BUNNY");
-  strong_grip(hand_group_, L, 40);
-}
-  else {
-
-   //I think this grip works faster
-  RCLCPP_INFO(L, "Closing gripper. TOUT TOUT TOUT. I WANT THE BIG BUNNY");
-  hand_group.setJointValueTarget("panda_finger_joint1", 0.020); 
-  moveit::planning_interface::MoveGroupInterface::Plan close_plan;
-  hand_group.plan(close_plan) == moveit::core::MoveItErrorCode::SUCCESS;
-  hand_group.execute(close_plan);
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-}
-
-  //Move 4
-  RCLCPP_INFO(L, "Move D: Lifting object to safe height");
-  arm_group_->setMaxVelocityScalingFactor(0.5);
-  arm_group_->setMaxAccelerationScalingFactor(0.5);
-  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, safe_z, gripper_yaw), L, "Move D")) { fail(); return; }
-  //std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-  //Move 5
-  RCLCPP_INFO(L, "Move E: Translating over obstacles to basket");
-  if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move E")) { fail(); return; }
-  //std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-  //Move 6
-  RCLCPP_INFO(L, "Move F: Descending into basket");
-  if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, basket_z), L, "Move F")) { fail(); return; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-  
-
-  // //Move 7
-
-  // if (!open_gripper(hand_group_, L)) { fail(); return; }
-
-  //OLD RELEASE//
-  // RCLCPP_INFO(L, "Move G: KOBE! Releasing shape");
-  // moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
-  // hand_group.setMaxVelocityScalingFactor(1.0);
-  // hand_group.setMaxAccelerationScalingFactor(1.0);
-  // moveit::planning_interface::MoveGroupInterface::Plan hand_plan;
-  // hand_group.setNamedTarget("open");
-  // bool success = (hand_group.plan(hand_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  // hand_group.execute(hand_plan);
-  // std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-
-  //I think this release works faster
-  RCLCPP_INFO(L, "KOBE!");
-  hand_group.setNamedTarget("open");
-  moveit::planning_interface::MoveGroupInterface::Plan final_open_plan;
-  hand_group.plan(final_open_plan) == moveit::core::MoveItErrorCode::SUCCESS;
-  hand_group.execute(final_open_plan);
-  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-
-  //Move 8
-  RCLCPP_INFO(L, "Move F: Ascending above basket");
-  if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move F")) { fail(); return; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-  //Move 9
-  RCLCPP_INFO(L, "Returning to 'ready' home position...");
-  go_home(arm_group_, L);
-  std::this_thread::sleep_for(std::chrono::milliseconds(500)); 
-
+  pick_and_place_shape(t1_shape, gx, gy, gz);
 
   RCLCPP_INFO(L, "=== Task 1 complete ===");
 }
@@ -623,144 +261,79 @@ void cw2::t2_callback(
   cw2::SHAPE mystery_shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
   std::vector<PointCPtr> clusters;
 
+  arm_group_->setPlanningTime(5.0);
+  arm_group_->setMaxVelocityScalingFactor(0.2);
+  arm_group_->setMaxAccelerationScalingFactor(0.2);
   
-  static const std::string planning_group = "panda_arm";
-  moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
+  auto fail = [&]() {
+    open_gripper(hand_group_, L);
+    go_home(arm_group_, L);
+  };
 
-  move_group2.setPlanningTime(5.0);
-  move_group2.setMaxVelocityScalingFactor(0.2);
-  move_group2.setMaxAccelerationScalingFactor(0.2);
+  //Reference object 1
   
-  geometry_msgs::msg::Pose target_pose; // Declare target_pose here so it can be reused for all three moves (we will just update the position each time)
+  double ox = request->ref_object_points[0].point.x;
+  double oy = request->ref_object_points[0].point.y;
+  double oz = request->ref_object_points[0].point.z + 0.5;
 
-  double roll = M_PI; // 180 degrees
-  double pitch = 0.0;
-  double yaw = -M_PI / 4.0; // -45 degrees
+  if (!joint_move(arm_group_, td_pose(ox, oy, oz), L, "Move A")) { fail(); return; }
 
-  double half_roll = roll / 2.0;
-  double half_pitch = pitch / 2.0;
-  double half_yaw = yaw / 2.0;
-
-
-  double w = std::cos(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
-  double x = std::sin(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) - std::cos(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
-  double y = std::cos(half_roll) * std::sin(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::cos(half_pitch) * std::sin(half_yaw);
-  double z = std::cos(half_roll) * std::cos(half_pitch) * std::sin(half_yaw) - std::sin(half_roll) * std::sin(half_pitch) * std::cos(half_yaw);
- 
-  target_pose.orientation.x = x; 
-  target_pose.orientation.y = y;
-  target_pose.orientation.z = z;
-  target_pose.orientation.w = w;  
-
-    //Reference object 1
+  clusters = findClusters();
   
-  target_pose.position.x = request->ref_object_points[0].point.x;
-  target_pose.position.y = request->ref_object_points[0].point.y;
-  target_pose.position.z = request->ref_object_points[0].point.z + 0.5;
-  move_group2.setPoseTarget(target_pose);
-  moveit::planning_interface::MoveGroupInterface::Plan plan1;
-
-  if(move_group2.plan(plan1) == moveit::core::MoveItErrorCode::SUCCESS)
+  for (size_t i = 0; i < clusters.size(); i++)
   {
-    move_group2.execute(plan1);
+    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-
-    clusters = findClusters();
+    reference_shape_1 = classifyShape(clusters[i]);
     
-    for (size_t i = 0; i < clusters.size(); i++)
+    if (reference_shape_1.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_1.size != cw2::SHAPE_SIZE::UNKNOWN) 
     {
-      RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
-
-      reference_shape_1 = classifyShape(clusters[i]);
-      
-      if (reference_shape_1.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_1.size != cw2::SHAPE_SIZE::UNKNOWN) 
-      {
-        break; 
-      }
+      break; 
     }
-
   }
-  else
-  {
-    RCLCPP_WARN(L, "Error moving to reference shape 1");
-    return;
-  }
-  
 
   
   //Reference object 2
-  target_pose.position.x = request->ref_object_points[1].point.x;
-  target_pose.position.y = request->ref_object_points[1].point.y;
-  target_pose.position.z = request->ref_object_points[1].point.z + 0.5;
+  ox = request->ref_object_points[1].point.x;
+  oy = request->ref_object_points[1].point.y;
+  oz = request->ref_object_points[1].point.z + 0.5;
 
-  move_group2.setPoseTarget(target_pose);
-  moveit::planning_interface::MoveGroupInterface::Plan plan2;
+  if (!joint_move(arm_group_, td_pose(ox, oy, oz), L, "Move B")) { fail(); return; }
 
-  if(move_group2.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS)
-  {
-    move_group2.execute(plan2);
- 
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  clusters = findClusters();
   
-
-    clusters = findClusters();
-    
-    for (size_t i = 0; i < clusters.size(); i++)
-    {
-      RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
-
-      reference_shape_2 = classifyShape(clusters[i]);
-      
-      if (reference_shape_2.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_2.size != cw2::SHAPE_SIZE::UNKNOWN) 
-      {
-        break; 
-      }
-    }
-
-  }
-  else
+  for (size_t i = 0; i < clusters.size(); i++)
   {
-    RCLCPP_WARN(L, "Error moving to reference shape 2");
-    return;
+    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
+
+    reference_shape_2 = classifyShape(clusters[i]);
+    
+    if (reference_shape_2.type != cw2::SHAPE_TYPE::UNKNOWN && reference_shape_2.size != cw2::SHAPE_SIZE::UNKNOWN) 
+    {
+      break; 
+    }
   }
 
 
   //Mystery object
-  target_pose.position.x = request->mystery_object_point.point.x;
-  target_pose.position.y = request->mystery_object_point.point.y;
-  target_pose.position.z = request->mystery_object_point.point.z + 0.5;
+  ox = request->ref_object_points[2].point.x;
+  oy = request->ref_object_points[2].point.y;
+  oz = request->ref_object_points[2].point.z + 0.5;
 
-  move_group2.setPoseTarget(target_pose);
-  moveit::planning_interface::MoveGroupInterface::Plan plan3;
+  if (!joint_move(arm_group_, td_pose(ox, oy, oz), L, "Move C")) { fail(); return; }
 
-  if(move_group2.plan(plan3) == moveit::core::MoveItErrorCode::SUCCESS)
+  clusters = findClusters();
+  
+  for (size_t i = 0; i < clusters.size(); i++)
   {
-    move_group2.execute(plan3);
+    RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-
-    clusters = findClusters();
+    mystery_shape = classifyShape(clusters[i]);
     
-    for (size_t i = 0; i < clusters.size(); i++)
+    if (mystery_shape.type != cw2::SHAPE_TYPE::UNKNOWN && mystery_shape.size != cw2::SHAPE_SIZE::UNKNOWN) 
     {
-      RCLCPP_INFO(node_->get_logger(), "Classifyting Cluster %ld", i);
-
-      mystery_shape = classifyShape(clusters[i]);
-      
-      if (mystery_shape.type != cw2::SHAPE_TYPE::UNKNOWN && mystery_shape.size != cw2::SHAPE_SIZE::UNKNOWN) 
-      {
-        break; 
-      }
+      break; 
     }
-
-  }
-  else
-  {
-    RCLCPP_WARN(L, "Error moving to mystery shape");
-    return;
   }
 
 
@@ -809,35 +382,12 @@ void cw2::t3_callback(
   arm_group_->setMaxVelocityScalingFactor(0.5);
   arm_group_->setMaxAccelerationScalingFactor(0.5);
 
-  // static const std::string planning_group = "panda_arm";
-  // moveit::planning_interface::MoveGroupInterface move_group3(node_, planning_group);
+  auto fail = [&]() {
+    open_gripper(hand_group_, L);
+    go_home(arm_group_, L);
+  };
 
-  // move_group3.setPlanningTime(10.0); //maybe chabge that to 5 seconds
-  // move_group3.setMaxVelocityScalingFactor(0.2);
-  // move_group3.setMaxAccelerationScalingFactor(0.2);
-  
-  geometry_msgs::msg::Pose target_pose; // Declare target_pose here so it can be reused for all three moves (we will just update the position each time)
-
-  double roll = M_PI; // 180 degrees
-  double pitch = 0.0;
-  double yaw = -M_PI / 4.0; // -45 degrees
-
-  double half_roll = roll / 2.0;
-  double half_pitch = pitch / 2.0;
-  double half_yaw = yaw / 2.0;
-
-
-  double w = std::cos(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
-  double x = std::sin(half_roll) * std::cos(half_pitch) * std::cos(half_yaw) - std::cos(half_roll) * std::sin(half_pitch) * std::sin(half_yaw);
-  double y = std::cos(half_roll) * std::sin(half_pitch) * std::cos(half_yaw) + std::sin(half_roll) * std::cos(half_pitch) * std::sin(half_yaw);
-  double z = std::cos(half_roll) * std::cos(half_pitch) * std::sin(half_yaw) - std::sin(half_roll) * std::sin(half_pitch) * std::cos(half_yaw);
- 
-  target_pose.orientation.x = x; 
-  target_pose.orientation.y = y;
-  target_pose.orientation.z = z;
-  target_pose.orientation.w = w; 
-
-
+  //Poses to visit to survey board
   std::array<std::array<double, 3>, 16> target_poses = {{
     {-0.45, 0.00, 0.65},
     {-0.45, 0.17, 0.65},
@@ -856,7 +406,6 @@ void cw2::t3_callback(
     {-0.45, -0.35, 0.65},
     {-0.45, -0.17, 0.65},
 
-
   }};
   
   std::vector<PointCPtr> clusters;
@@ -870,18 +419,8 @@ void cw2::t3_callback(
 
   for (const auto& pose : target_poses)
   {
-    target_pose.position.x = pose[0];
-    target_pose.position.y = pose[1];
-    target_pose.position.z = pose[2];
 
-
-
-    // move_group3.setPoseTarget(target_pose);
-    // moveit::planning_interface::MoveGroupInterface::Plan plan;
-    // if(move_group3.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS)
-    // {
-    //   move_group3.execute(plan);
-    if (cart_move(arm_group_, target_pose, L, "Scanning Move"))
+    if (joint_move(arm_group_, td_pose(pose[0], pose[1], pose[2]), L, "Scanning Move"))
     {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
@@ -945,109 +484,113 @@ void cw2::t3_callback(
     else
     {
       RCLCPP_WARN(L, "Error During Motion Planning of pose {%.2f, %.2f, %.2f}", pose[0], pose[1], pose[2]);
+      fail();
+      return;
     }
 
-    
-    RCLCPP_INFO (L, " %ld crosses, %ld noughts, fiiiiive golden riiings", crosses.size(), noughts.size()); 
+    RCLCPP_INFO (L, "%ld crosses, %ld noughts", crosses.size(), noughts.size()); 
 
   }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
 
-    int num_crosses = (int) crosses.size();
-    int num_noughts = (int) noughts.size();
+  int num_crosses = (int) crosses.size();
+  int num_noughts = (int) noughts.size();
+  
+  RCLCPP_INFO (L, "Final count: %d crosses, %d noughts", num_crosses, num_noughts); 
+
+  // Order from largest to smallest to simplify pickup
+  std::sort(crosses.begin(), crosses.end(), [](cw2::SHAPE x, cw2::SHAPE y) 
+  {
+    return x.size > y.size;
+  });
+
+  std::sort(noughts.begin(), noughts.end(), [](cw2::SHAPE x, cw2::SHAPE y) 
+  {
+    return x.size > y.size;
+  });
+
+  //report total number of shapes
+  response->total_num_shapes = num_crosses + num_noughts;
+
+  cw2::SHAPE shape_to_pick;
+
+  //report most common shape
+  if (num_noughts >= num_crosses)
+  {
+    response->num_most_common_shape = num_noughts;
+    shape_to_pick = noughts.front();
+  }
+  else
+  {
+    response->num_most_common_shape = num_crosses;
+    shape_to_pick = crosses.front();
     
-    RCLCPP_INFO (L, " %d crosses, %d noughts, fiiiiive golden riiings", num_crosses, num_noughts); 
-    std::sort(crosses.begin(), crosses.end(), [](cw2::SHAPE x, cw2::SHAPE y) 
-		{
-			return x.size > y.size;
-    });
+  }
 
-    std::sort(noughts.begin(), noughts.end(), [](cw2::SHAPE x, cw2::SHAPE y) 
-		{
-			return x.size > y.size;
-    });
+  for (const auto& pt : noughts) {
+    RCLCPP_INFO(L, "Nought at {%.2f, %.2f, %.2f}", pt.centroid.x(), pt.centroid.y(), pt.centroid.z());
+  }
 
-    response->total_num_shapes = num_crosses + num_noughts;
+  for (const auto& pt : crosses) {
+    RCLCPP_INFO(L, "Cross at {%.2f, %.2f, %.2f}", pt.centroid.x(), pt.centroid.y(), pt.centroid.z());
+  }
 
-    cw2::SHAPE shape_to_pick;
+  // Cluster z correction
 
-    if (num_crosses >= num_noughts)
-    {
-      response->num_most_common_shape = num_crosses;
-      shape_to_pick = crosses.front();
-    }
-    else
-    {
-      response->num_most_common_shape = num_noughts;
-      shape_to_pick = noughts.front();
-    }
-
-    for (const auto& pt : noughts) {
-      RCLCPP_INFO(L, "Nought at {%.2f, %.2f, %.2f}", pt.centroid.x(), pt.centroid.y(), pt.centroid.z());
-    }
-
-    for (const auto& pt : crosses) {
-      RCLCPP_INFO(L, "Cross at {%.2f, %.2f, %.2f}", pt.centroid.x(), pt.centroid.y(), pt.centroid.z());
-    }
+  shape_to_pick.centroid.z() = shape_to_pick.centroid.z() - 0.065; //We scan the top of the shape
+  basket_location.z() = basket_location.z() - 0.050; // subtract 5cm of basket height
 
 
+  pick_and_place_shape(shape_to_pick, basket_location.x(), basket_lcation.y(), basket_location.z());
 
-  double grip_z = shape_to_pick.centroid.z() - 0.040 + 0.125;
-  double basket_z = basket_location.z() -0.050 + 0.35;
-  double safe_z = shape_to_pick.centroid.z() + 0.65;
-  double ox = shape_to_pick.centroid.x();
-  double oy = shape_to_pick.centroid.y();
-  double gx = basket_location.x();
-  double gy  = basket_location.y();
-
-
-
-
-  moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
-  hand_group.setMaxVelocityScalingFactor(1.0);
-  hand_group.setMaxAccelerationScalingFactor(1.0);
-
-  auto fail = [&]() {
-    open_gripper(hand_group_, L);
-    go_home(arm_group_, L);
-  };
-
+  RCLCPP_INFO(L, "=== Task 3 complete ===");
   
-  go_home(arm_group_, L);
-  // Move 1
-  RCLCPP_INFO(L, "Move A: Moving high above shape");
-  if (!joint_move(arm_group_, td_pose(ox, oy, safe_z), L, "Move A")) { fail(); return; }
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+}
 
-  if (!open_gripper(hand_group_, L)) { fail(); return; }
+// Global Moveit Helper Functions
 
-  // Determine shape yaw
-  
+///////////////////////////////////////////////////////////////////////////////
+// Reusable pick-and-place for ANY shape size (x = 20, 30, or 40mm)
+// Offsets and grip force scale automatically with input shape.
+///////////////////////////////////////////////////////////////////////////////
 
-  double shape_yaw_rad = shape_to_pick.yaw * (M_PI / 180.0);
-  double gripper_yaw = shape_yaw_rad - M_PI/4.0;
+bool cw2::pick_and_place_shape(
+  const cw2::SHAPE &shape
+  double target_x, double target_y, double target_z,
+  )
+{
+  auto L = node_->get_logger();
+  double cell_m = static_cast<float>(shape.size) / 1000.0;
 
-  double gx_pick = ox;
-  double gy_pick = oy;
-  double gx_drop = gx;
-  double gy_drop = gy;
+  double shape_yaw_rad = shape.yaw * (M_PI / 180.0);
 
-  if (shape_to_pick.type == cw2::SHAPE_TYPE::NOUGHT) {
-    if (shape_to_pick.size == cw2::SHAPE_SIZE::MM_40){
+  double gx_pick = shape.centroid.x();
+  double gy_pick = shape.centroid.y();
+  double gx_drop = target_x;
+  double gy_drop = target_y;
+
+  double grip_z = shape.centroid.z() 0.15; //- 0.040 + 0.125;
+  double basket_z = target_z + 0.35; //-0.050 + 0.35;
+  double safe_z = shape.centroid.z() + 0.65;
+
+  // Pickup offsets for each scenario
+
+  if (shape.type == cw2::SHAPE_TYPE::NOUGHT) {
+    if (shape.size == cw2::SHAPE_SIZE::MM_40){
     RCLCPP_INFO(L, "Applying nought offsets");
     gx_pick = ox + 0.08 * std::sin(shape_yaw_rad);
     gy_pick = oy - 0.08 * std::cos(shape_yaw_rad);
     gx_drop = gx;
     gy_drop = gy - 0.05;
-    } else if ( shape_to_pick.size == cw2::SHAPE_SIZE::MM_30){
+    } else if (shape.size == cw2::SHAPE_SIZE::MM_30){
     RCLCPP_INFO(L, "Applying nought offsets");
     gx_pick = ox + 0.06 * std::sin(shape_yaw_rad);
     gy_pick = oy - 0.06 * std::cos(shape_yaw_rad);
     gx_drop = gx;
     gy_drop = gy - 0.05;
-    } else if (shape_to_pick.size == cw2::SHAPE_SIZE::MM_20){
+    } else if (shape.size == cw2::SHAPE_SIZE::MM_20){
       RCLCPP_INFO(L, "Applying nought offsets");
     gx_pick = ox + 0.05 * std::sin(shape_yaw_rad);
     gy_pick = oy - 0.05 * std::cos(shape_yaw_rad);
@@ -1055,13 +598,13 @@ void cw2::t3_callback(
     gy_drop = gy - 0.05;
     }
   } else {
-    if (shape_to_pick.size == cw2::SHAPE_SIZE::MM_40){
+    if (shape.size == cw2::SHAPE_SIZE::MM_40){
     RCLCPP_INFO(L, "Applying cross offsets");
     gx_pick = ox + 0.05 * std::cos(shape_yaw_rad);
     gy_pick = oy + 0.05 * std::sin(shape_yaw_rad);
     gx_drop = gx + 0.02;
     gy_drop = gy;
-    } else if (shape_to_pick.size == cw2::SHAPE_SIZE::MM_30){
+    } else if (shape.size == cw2::SHAPE_SIZE::MM_30){
     RCLCPP_INFO(L, "Applying cross offsets");
     gx_pick = ox + 0.04 * std::cos(shape_yaw_rad);
     gy_pick = oy + 0.04 * std::sin(shape_yaw_rad);
@@ -1069,8 +612,8 @@ void cw2::t3_callback(
     gy_drop = gy;
     } else {
       RCLCPP_INFO(L, "Applying cross offsets");
-    gx_pick = ox + 0.0125 * std::cos(shape_yaw_rad);
-    gy_pick = oy + 0.0125 * std::sin(shape_yaw_rad);
+    gx_pick = ox + 0.037 * std::cos(shape_yaw_rad);
+    gy_pick = oy + 0.037 * std::sin(shape_yaw_rad);
     gx_drop = gx + 0.02;
     gy_drop = gy;
     }
@@ -1078,79 +621,57 @@ void cw2::t3_callback(
     
   }
   
-
   // Move 2
   RCLCPP_INFO(L, "Move B: Descending to grip");
   arm_group_->setMaxVelocityScalingFactor(0.1);
   arm_group_->setMaxAccelerationScalingFactor(0.1);
-  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, grip_z, gripper_yaw), L, "Move B")) { fail(); return; }
+  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, grip_z), L, "Move B")) { fail(); return false; }
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  //Move 3
 
-  //OLD GRIP//
-  // RCLCPP_INFO(L, "Move C: Closing gripper. I WANT THE BIG BUNNY");
-  // strong_grip(hand_group_, L, 40);  // Task 1 always x=40mm
+  //Conditional grip for certains hapes
+  if (shape.size == cw2::SHAPE_SIZE::MM_20 && shape.type == cw2::SHAPE_TYPE::CROSS)
+  {
+    RCLCPP_INFO(L, "Move C: Closing gripper");
+    strong_grip(hand_group_, L, 20);
+  }
+  else 
+  {
+    RCLCPP_INFO(L, "Move C: Closing gripper");
+    hand_group_->setJointValueTarget("panda_finger_joint1", 0.020); 
+    moveit::planning_interface::MoveGroupInterface::Plan close_plan;
 
-   //I think this grip works faster
-  RCLCPP_INFO(L, "Closing gripper. TOUT TOUT TOUT. I WANT THE BIG BUNNY");
-  hand_group.setJointValueTarget("panda_finger_joint1", 0.020); 
-  moveit::planning_interface::MoveGroupInterface::Plan close_plan;
-  bool success = (hand_group.plan(close_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  hand_group.execute(close_plan);
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    if (!hand_group_->plan(close_plan) == moveit::core::MoveItErrorCode::SUCCESS) {fail(); return false;}
+    hand_group_->execute(close_plan);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  }
 
   //Move 4
   RCLCPP_INFO(L, "Move D: Lifting object to safe height");
   arm_group_->setMaxVelocityScalingFactor(0.5);
   arm_group_->setMaxAccelerationScalingFactor(0.5);
-  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, safe_z, gripper_yaw), L, "Move D")) { fail(); return; }
-  //std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  if (!cart_move(arm_group_, td_pose(gx_pick, gy_pick, safe_z), L, "Move D")) { fail(); return false; }
 
   //Move 5
   RCLCPP_INFO(L, "Move E: Translating over obstacles to basket");
-  if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move E")) { fail(); return; }
-  //std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move E")) { fail(); return false; }
 
   //Move 6
   RCLCPP_INFO(L, "Move F: Descending into basket");
-   if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, basket_z), L, "Move F")) { fail(); return; }
+  if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, basket_z), L, "Move F")) { fail(); return false; }
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-  
-
-  // //Move 7
-
-  // if (!open_gripper(hand_group_, L)) { fail(); return; }
-
-  //OLD RELEASE//
-  // RCLCPP_INFO(L, "Move G: KOBE! Releasing shape");
-  // moveit::planning_interface::MoveGroupInterface hand_group(node_, "hand");
-  // hand_group.setMaxVelocityScalingFactor(1.0);
-  // hand_group.setMaxAccelerationScalingFactor(1.0);
-  // moveit::planning_interface::MoveGroupInterface::Plan hand_plan;
-  // hand_group.setNamedTarget("open");
-  // bool success = (hand_group.plan(hand_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  // hand_group.execute(hand_plan);
-  // std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-
-  //I think this release works faster
-  RCLCPP_INFO(L, "KOBE!");
-  hand_group.setNamedTarget("open");
+  RCLCPP_INFO(L, "Releasing Item!");
+  hand_group_->setNamedTarget("open");
   moveit::planning_interface::MoveGroupInterface::Plan final_open_plan;
-  success = (hand_group.plan(final_open_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  hand_group.execute(final_open_plan);
+  if (!hand_group->plan(final_open_plan) == moveit::core::MoveItErrorCode::SUCCESS) { fail(); return false; }
+  hand_group->execute(final_open_plan);
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-  // RCLCPP_INFO(L, "Move E: Translating over obstacles to basket");
-  // if (!joint_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move E")) { fail(); return; }
-  // std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-
   //Move 8
-  RCLCPP_INFO(L, "Move F: Ascending above basket (Oogway ascends!)");
-  if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move F")) { fail(); return; }
+  RCLCPP_INFO(L, "Move F: Ascending above basket");
+  if (!cart_move(arm_group_, td_pose(gx_drop, gy_drop, safe_z), L, "Move F")) { fail(); return false; }
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   //Move 9
@@ -1158,11 +679,104 @@ void cw2::t3_callback(
   go_home(arm_group_, L);
   std::this_thread::sleep_for(std::chrono::milliseconds(500)); 
 
+  return true;
+}
 
+bool cw2::joint_move(
+  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
+  const geometry_msgs::msg::Pose &t, const rclcpp::Logger &l,
+  const std::string &d, int n = 5)
+{
+  m->setPoseTarget(t);
+  for (int a = 1; a <= n; ++a) {
+    moveit::planning_interface::MoveGroupInterface::Plan p;
+    if (m->plan(p) != moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_WARN(l, "%s: plan %d/%d", d.c_str(), a, n); continue;
+    }
+    if (m->execute(p) == moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_INFO(l, "%s: OK", d.c_str()); return true;
+    }
+  }
+  RCLCPP_ERROR(l, "%s: FAIL", d.c_str()); return false;
+}
 
-  RCLCPP_INFO(L, "=== Task 3 complete ===");
+bool cw2::cart_move(
+  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
+  const geometry_msgs::msg::Pose &t, const rclcpp::Logger &l,
+  const std::string &d)
+{
+  std::vector<geometry_msgs::msg::Pose> w = {t};
+  moveit_msgs::msg::RobotTrajectory tr;
+  double f = m->computeCartesianPath(w, 0.005, 0.0, tr);
+  if (f >= 0.90 && m->execute(tr) == moveit::core::MoveItErrorCode::SUCCESS) {
+    RCLCPP_INFO(l, "%s: Cart OK (%.0f%%)", d.c_str(), f * 100); return true;
+  }
+  RCLCPP_WARN(l, "%s: Cart %.0f%%, joint fallback", d.c_str(), f * 100);
+  return joint_move(m, t, l, d);
+}
+
+bool open_gripper(
+  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &h,
+  const rclcpp::Logger &l)
+{
+  h->setNamedTarget("open");
+  moveit::planning_interface::MoveGroupInterface::Plan p;
+
+  if (h->plan(p) != moveit::core::MoveItErrorCode::SUCCESS) return false;
+  if (h->execute(p) != moveit::core::MoveItErrorCode::SUCCESS) return false;
+  RCLCPP_INFO(l, "Gripper OPEN"); return true;
+}
+
+// Grip with force scaled to shape size.
+// cell_size_mm: arm width of the shape (20, 30, or 40).
+// Target = (arm_half - 5mm) so there's always 5mm of squeeze.
+//   x=40 → target=0.015, squeeze=5mm ✓
+//   x=30 → target=0.010, squeeze=5mm ✓
+//   x=20 → target=0.005, squeeze=5mm ✓
+// Without scaling, x=20 shapes get PUSHED OUT (target > shape width)
+void cw2::strong_grip(
+  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &h,
+  const rclcpp::Logger &l,
+  int cell_size_mm = 40)
+{
+  // Target = arm_half - 10mm squeeze. Maximum force for small shapes.
+  //   x=40 → target=0.010, squeeze=10mm
+  //   x=30 → target=0.005, squeeze=10mm
+  //   x=20 → target=0.001, squeeze=9mm (nearly fully closed)
+  double arm_half_m = (cell_size_mm / 2.0) / 1000.0;
+  double target = std::max(0.001, arm_half_m - 0.010);
   
+  // FULL SPEED grip — slow speed (0.05) causes controller timeout
+  // before fingers close enough on small shapes. CW1 used 1.0.
+  h->setMaxVelocityScalingFactor(0.1);
+  h->setMaxAccelerationScalingFactor(0.1);
+  RCLCPP_INFO(l, "  GRIP (size=%dmm, target=%.4f, squeeze=8mm)", cell_size_mm, target);
+  
+  h->setJointValueTarget("panda_finger_joint1", target);
+  h->setJointValueTarget("panda_finger_joint2", target);
+  
+  moveit::planning_interface::MoveGroupInterface::Plan p;
+  if (h->plan(p) != moveit::core::MoveItErrorCode::SUCCESS) {
+    RCLCPP_WARN(l, "  Grip plan failed"); return;
+  }
+  h->execute(p);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+  RCLCPP_INFO(l, "  Grip applied");
+}
 
+bool cw2::go_home(
+  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> &m,
+  const rclcpp::Logger &l)
+{
+  m->setNamedTarget("ready");
+  for (int a = 1; a <= 5; ++a) {
+    moveit::planning_interface::MoveGroupInterface::Plan p;
+    if (m->plan(p) != moveit::core::MoveItErrorCode::SUCCESS) continue;
+    if (m->execute(p) == moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_INFO(l, "Home OK"); return true;
+    }
+  }
+  RCLCPP_ERROR(l, "Home FAIL"); return false;
 }
 
 //PCL FUNCTIONS
@@ -1321,7 +935,6 @@ std::vector<PointCPtr> cw2::extractEuclideanClusters(double clusterTolerance, in
 
 }
 
-
 Eigen::Vector3f cw2::getCentroid(PointCPtr &in_cloud_ptr)
 {
   
@@ -1336,6 +949,7 @@ cw2::SHAPE cw2::classifyShape(PointCPtr &in_cloud_ptr)
 
   cw2::SHAPE shape = {cw2::SHAPE_TYPE::UNKNOWN, cw2::SHAPE_SIZE::UNKNOWN, Eigen::Vector3f(0.0f, 0.0f, 0.0f), 0.0};
 
+  // Compute OBB and Eigenvalues of clustered cloud
   g_inertia_estimator.setInputCloud(in_cloud_ptr);
   g_inertia_estimator.compute();
 
@@ -1367,6 +981,7 @@ cw2::SHAPE cw2::classifyShape(PointCPtr &in_cloud_ptr)
     return shape;
   }
 
+  // calculate average distance of points from centroid as well as number of points within 20mm of the centroid
   int num_points_close = 0;
   const float close_point_threshold = 0.020f;
 
@@ -1374,6 +989,7 @@ cw2::SHAPE cw2::classifyShape(PointCPtr &in_cloud_ptr)
   double sum_dist = 0.0;
   double closest_distance = std::numeric_limits<float>::max();
   Eigen::Vector3f closest_point;
+
   for (const auto& pt : in_cloud_ptr->points) {
     Eigen::Vector3f pt_vec(pt.x, pt.y, pt.z);
     double dist = (pt_vec - centroid_vec).norm();
@@ -1389,10 +1005,12 @@ cw2::SHAPE cw2::classifyShape(PointCPtr &in_cloud_ptr)
     }
 
   }
+
   double avg_dist = (in_cloud_ptr->size() > 0) ? (sum_dist / in_cloud_ptr->size()) : 0.0;
 
 
   //SHAPE CLASSIFICATION
+  // Based on the number of points within a 20mm radius from the centroid. Helps to find crosses
 
   if (num_points_close > 500)
   {
@@ -1408,6 +1026,8 @@ cw2::SHAPE cw2::classifyShape(PointCPtr &in_cloud_ptr)
 
 
   //SIZE CLASSIFICATION
+  // For crosses, this is the size of the OBB
+  // For noughts, this is the average distance from the centroid, as the OBB was not working properly
 
   float delta = 1000*(abs(max_OBB.x - min_OBB.x) + abs(max_OBB.y - min_OBB.y))/2; //convert from m to mm
 
@@ -1467,6 +1087,9 @@ cw2::SHAPE cw2::classifyShape(PointCPtr &in_cloud_ptr)
   
   //YAW CLASSIFICATION
 
+  // for crosses, use the OBB
+  // for noughts, use a vector to the closest point, signifying the inner edge of the shape
+
   double yaw;
   if (shape.type == cw2::SHAPE_TYPE::NOUGHT)
   { 
@@ -1480,6 +1103,7 @@ cw2::SHAPE cw2::classifyShape(PointCPtr &in_cloud_ptr)
   // Print yaw
   RCLCPP_INFO(node_->get_logger(), "Yaw: %.3f", 180*yaw/M_PI);
 
+  // Convert yaw to between 0-90 degrees as both shapes are 4-symetrical
   double adjusted_yaw = (int)(90 - (180*yaw/M_PI))%90;
 
   if (adjusted_yaw < 0)
@@ -1530,29 +1154,6 @@ void cw2::pubFilteredPCMsg(
   pcl::toROSMsg(pc, output);
   output.header = header;
   pc_pub->publish(output);
-
-}
-
-//debug helper
-void cw2::processCloud()
-{
-  if (!latest_cloud_msg_) {
-    RCLCPP_WARN(node_->get_logger(), "reprocessCloud: no cloud yet, skipping.");
-    return;
-  }
-  std_msgs::msg::Header header;
-  header.frame_id = "color";
-  header.stamp = latest_cloud_msg_->header.stamp;
-
-  pubFilteredPCMsg(g_pub_cloud, *g_cloud_filtered, header);
-  applyPassthrough(pcl_pass_min_, pcl_pass_max_, pcl_pass_axis_, g_cloud_filtered);
-  pubFilteredPCMsg(g_pub_passthrough, *g_cloud_filtered, header);
-  applyOutlierRemoval(pcl_outlier_mean_k_, pcl_outlier_stddev_);
-  pubFilteredPCMsg(g_pub_outlier, *g_cloud_filtered, header);
-  findNormals(pcl_normal_k_);
-  segmentationPipeline(pcl_plane_normal_weight_, pcl_plane_max_iterations_, pcl_plane_distance_);
-  pubFilteredPCMsg(g_pub_plane, *g_cloud_segmented_plane, header);
-  extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
 
 }
 
@@ -1614,8 +1215,6 @@ std::string cw2::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
 void cw2::filteringPipeline()
 {
   rosTopicToCloud(latest_cloud_msg_);
-  // applyVoxelGrid(0.05);
-  //applyPassthrough(-0.31, 0.18, "y");
   applyOutlierRemoval(20, 0.75);
   findNormals(25);
   segmentationPipeline(0.1, 100, 0.01);
